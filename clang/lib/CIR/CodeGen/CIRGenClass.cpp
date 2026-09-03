@@ -1076,7 +1076,12 @@ void CIRGenFunction::enterDtorCleanups(const CXXDestructorDecl *dd,
     assert(dd->getOperatorDelete() &&
            "operator delete missing - EnterDtorCleanups");
     if (cxxStructorImplicitParamValue) {
-      cgm.errorNYI(dd->getSourceRange(), "deleting destructor with vtt");
+      if (cgm.getTarget().getCXXABI().isMicrosoft()) {
+        cgm.errorNYI(dd->getSourceRange(),
+                     "enterDtorCleanups: MSVC conditional deleting destructor");
+      } else {
+        cgm.errorNYI(dd->getSourceRange(), "deleting destructor with vtt");
+      }
     } else {
       if (dd->getOperatorDelete()->isDestroyingOperatorDelete()) {
         cgm.errorNYI(dd->getSourceRange(),
