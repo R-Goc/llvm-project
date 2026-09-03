@@ -1519,8 +1519,15 @@ void CIRGenFunction::emitCXXDeleteExpr(const CXXDeleteExpr *e) {
   if (e->isArrayForm() &&
       cgm.getASTContext().getTargetInfo().emitVectorDeletingDtors(
           cgm.getASTContext().getLangOpts())) {
-    cgm.errorNYI(e->getSourceRange(),
-                 "emitCXXDeleteExpr: emitVectorDeletingDtors");
+    if (const auto *rd = deleteTy->getAsCXXRecordDecl()) {
+      if (rd->hasDefinition() && !rd->hasTrivialDestructor()) {
+        const auto *dtor = rd->getDestructor();
+        if (dtor && dtor->isVirtual()) {
+          cgm.errorNYI(e->getSourceRange(),
+                       "emitCXXDeleteExpr: emitVectorDeletingDtors");
+        }
+      }
+    }
   }
 
   if (e->isArrayForm()) {

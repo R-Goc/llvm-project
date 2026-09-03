@@ -2671,8 +2671,7 @@ std::pair<cir::FuncType, cir::FuncOp> CIRGenModule::getAddrAndTypeOfCXXStructor(
     if (getTarget().getCXXABI().isMicrosoft() &&
         gd.getDtorType() == Dtor_Complete &&
         md->getParent()->getNumVBases() == 0)
-      errorNYI(md->getSourceRange(),
-               "getAddrAndTypeOfCXXStructor: MS ABI complete destructor");
+      gd = gd.getWithDtorType(Dtor_Base);
   }
 
   if (!fnType) {
@@ -2707,8 +2706,7 @@ cir::FuncOp CIRGenModule::getAddrOfFunction(clang::GlobalDecl gd,
     if (getTarget().getCXXABI().isMicrosoft() &&
         gd.getDtorType() == Dtor_Complete &&
         dd->getParent()->getNumVBases() == 0)
-      errorNYI(dd->getSourceRange(),
-               "getAddrOfFunction: MS ABI complete destructor");
+      gd = gd.getWithDtorType(Dtor_Base);
   }
 
   StringRef mangledName = getMangledName(gd);
