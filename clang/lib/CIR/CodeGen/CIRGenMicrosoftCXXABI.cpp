@@ -259,7 +259,7 @@ public:
                                                    bool virtualCall) override;
 
   bool isVirtualOffsetNeededForVTableField(CIRGenFunction &cgf,
-                                          CIRGenFunction::VPtr vptr) override {
+                                           CIRGenFunction::VPtr vptr) override {
     return vptr.nearestVBase != nullptr;
   }
 
@@ -282,8 +282,9 @@ public:
 
   void emitVirtualInheritanceTables(const CXXRecordDecl *rd) override;
 
-  void initializeHiddenVirtualInheritanceMembers(
-      CIRGenFunction &cgf, const CXXRecordDecl *rd) override;
+  void
+  initializeHiddenVirtualInheritanceMembers(CIRGenFunction &cgf,
+                                            const CXXRecordDecl *rd) override;
 
   mlir::Value
   getVirtualBaseClassOffset(mlir::Location loc, CIRGenFunction &cgf,
@@ -326,18 +327,19 @@ public:
 
 } // namespace
 
-CharUnits CIRGenMicrosoftCXXABI::getVirtualFunctionPrologueThisAdjustment(
-    GlobalDecl gd) {
+CharUnits
+CIRGenMicrosoftCXXABI::getVirtualFunctionPrologueThisAdjustment(GlobalDecl gd) {
   const auto *md = cast<CXXMethodDecl>(gd.getDecl());
 
   if (const auto *dd = dyn_cast<CXXDestructorDecl>(md)) {
     if (gd.getDtorType() == Dtor_Complete)
       return CharUnits();
 
-    gd = GlobalDecl(dd, cgm.getASTContext().getTargetInfo().emitVectorDeletingDtors(
-                            cgm.getASTContext().getLangOpts())
-                            ? Dtor_VectorDeleting
-                            : Dtor_Deleting);
+    gd = GlobalDecl(dd,
+                    cgm.getASTContext().getTargetInfo().emitVectorDeletingDtors(
+                        cgm.getASTContext().getLangOpts())
+                        ? Dtor_VectorDeleting
+                        : Dtor_Deleting);
   }
 
   MethodVFTableLocation ml =
@@ -365,8 +367,8 @@ mlir::Value CIRGenMicrosoftCXXABI::getVBaseOffsetFromVBPtr(
       builder.createBitcast(thisAddr.getPointer(), u8PtrTy);
 
   mlir::Value vbPtrOffsetVal = builder.getSInt32(vbPtrOffset, loc);
-  mlir::Value vbPtr =
-      cir::PtrStrideOp::create(builder, loc, u8PtrTy, thisBytePtr, vbPtrOffsetVal);
+  mlir::Value vbPtr = cir::PtrStrideOp::create(builder, loc, u8PtrTy,
+                                               thisBytePtr, vbPtrOffsetVal);
   if (vbPtrOut)
     *vbPtrOut = vbPtr;
 
@@ -589,14 +591,14 @@ void CIRGenMicrosoftCXXABI::emitDestructorCall(
     type = Dtor_Base;
 
   GlobalDecl gd(dd, type);
-  CIRGenCallee callee = CIRGenCallee::forDirect(
-      cgm.getAddrOfCXXStructor(gd).getOperation(), gd);
+  CIRGenCallee callee =
+      CIRGenCallee::forDirect(cgm.getAddrOfCXXStructor(gd).getOperation(), gd);
 
   if (dd->isVirtual()) {
     assert(type != CXXDtorType::Dtor_Deleting &&
            "The deleting destructor should only be called via a virtual call");
-    thisAddr = adjustThisArgumentForVirtualFunctionCall(cgf, GlobalDecl(dd, type),
-                                                        thisAddr, false);
+    thisAddr = adjustThisArgumentForVirtualFunctionCall(
+        cgf, GlobalDecl(dd, type), thisAddr, false);
   }
 
   cgf.emitCXXDestructorCall(gd, callee, thisAddr.emitRawPointer(), thisTy,
@@ -627,10 +629,10 @@ mlir::Value CIRGenMicrosoftCXXABI::emitVirtualDestructorCall(
   bool isGlobalDelete = de && de->isGlobalDelete() &&
                         context.getTargetInfo().callGlobalDeleteInDeletingDtor(
                             context.getLangOpts());
-  int32_t flags = (isDeleting ? 1 : 0) | (isGlobalDelete ? 4 : 0) |
-                  (isArrayDelete ? 2 : 0);
-  mlir::Value implicitParam = cgf.getBuilder().getSInt32(
-      flags, cgf.getLoc(dtor->getLocation()));
+  int32_t flags =
+      (isDeleting ? 1 : 0) | (isGlobalDelete ? 4 : 0) | (isArrayDelete ? 2 : 0);
+  mlir::Value implicitParam =
+      cgf.getBuilder().getSInt32(flags, cgf.getLoc(dtor->getLocation()));
 
   QualType thisTy;
   if (ce)
@@ -693,8 +695,7 @@ Address CIRGenMicrosoftCXXABI::adjustThisArgumentForVirtualFunctionCall(
     cir::PointerType u8PtrTy = builder.getUInt8PtrTy();
     mlir::Value u8This = builder.createBitcast(thisAddr.getPointer(), u8PtrTy);
     assert(adjustment.isPositive());
-    mlir::Value adjConst =
-        builder.getSInt32(adjustment.getQuantity(), loc);
+    mlir::Value adjConst = builder.getSInt32(adjustment.getQuantity(), loc);
     mlir::Value adjusted =
         cir::PtrStrideOp::create(builder, loc, u8PtrTy, u8This, adjConst);
     return Address(builder.createBitcast(adjusted, thisAddr.getElementType()),
@@ -741,8 +742,7 @@ Address CIRGenMicrosoftCXXABI::adjustThisArgumentForVirtualFunctionCall(
   if (!staticOffset.isZero()) {
     assert(staticOffset.isPositive());
     mlir::Value rawPtr = builder.createBitcast(result.getPointer(), u8PtrTy);
-    mlir::Value offsetVal =
-        builder.getSInt32(staticOffset.getQuantity(), loc);
+    mlir::Value offsetVal = builder.getSInt32(staticOffset.getQuantity(), loc);
     mlir::Value adjustedPtr =
         cir::PtrStrideOp::create(builder, loc, u8PtrTy, rawPtr, offsetVal);
     result = Address(adjustedPtr, builder.getUInt8Ty(),
@@ -758,9 +758,8 @@ Address CIRGenMicrosoftCXXABI::adjustThisArgumentForVirtualFunctionCall(
   return result;
 }
 
-cir::GlobalOp
-CIRGenMicrosoftCXXABI::getAddrOfVTable(const CXXRecordDecl *rd,
-                                       CharUnits vptrOffset) {
+cir::GlobalOp CIRGenMicrosoftCXXABI::getAddrOfVTable(const CXXRecordDecl *rd,
+                                                     CharUnits vptrOffset) {
   VFTableIdTy id(rd, vptrOffset);
   auto it = vftablesMap.find(id);
   if (it != vftablesMap.end())
@@ -792,13 +791,12 @@ CIRGenMicrosoftCXXABI::getAddrOfVTable(const CXXRecordDecl *rd,
   }
 
   cir::GlobalLinkageKind linkage =
-      rd->hasAttr<DLLImportAttr>()
-          ? cir::GlobalLinkageKind::LinkOnceODRLinkage
-          : cgm.getVTableLinkage(rd);
+      rd->hasAttr<DLLImportAttr>() ? cir::GlobalLinkageKind::LinkOnceODRLinkage
+                                   : cgm.getVTableLinkage(rd);
 
-  cir::GlobalOp vtable = cgm.createGlobalOp(
-      cgm.getLoc(rd->getLocation()), vftableName,
-      cgm.getVTableComponentType(), /*isConstant=*/true);
+  cir::GlobalOp vtable =
+      cgm.createGlobalOp(cgm.getLoc(rd->getLocation()), vftableName,
+                         cgm.getVTableComponentType(), /*isConstant=*/true);
   vtable.setLinkage(linkage);
 
   if (rd->hasAttr<DLLExportAttr>())
@@ -840,8 +838,8 @@ CIRGenCallee CIRGenMicrosoftCXXABI::getVirtualFunctionPointer(
   cir::PointerType tyPtr = builder.getPointerTo(ty);
   auto *methodDecl = cast<CXXMethodDecl>(gd.getDecl());
 
-  Address vptr =
-      adjustThisArgumentForVirtualFunctionCall(cgf, gd, thisAddr, /*virtualCall=*/true);
+  Address vptr = adjustThisArgumentForVirtualFunctionCall(cgf, gd, thisAddr,
+                                                          /*virtualCall=*/true);
   mlir::Value vtable = cgf.getVTablePtr(mlirLoc, vptr, methodDecl->getParent());
 
   MicrosoftVTableContext &vftContext = cgm.getMicrosoftVTableContext();
@@ -874,10 +872,12 @@ void CIRGenMicrosoftCXXABI::emitVTableDefinitions(CIRGenVTables &cgvt,
 
     mlir::Attribute rtti = nullptr;
     if (cgm.getASTContext().getLangOpts().RTTIData &&
-        llvm::any_of(vtLayout.vtable_components(),
-                     [](const VTableComponent &vtc) { return vtc.isRTTIKind(); })) {
-      rtti = getAddrOfRTTIDescriptor(cgm.getLoc(rd->getLocation()),
-                                     cgm.getASTContext().getCanonicalTagType(rd));
+        llvm::any_of(
+            vtLayout.vtable_components(),
+            [](const VTableComponent &vtc) { return vtc.isRTTIKind(); })) {
+      rtti =
+          getAddrOfRTTIDescriptor(cgm.getLoc(rd->getLocation()),
+                                  cgm.getASTContext().getCanonicalTagType(rd));
     }
 
     cgvt.createVTableInitializer(vtable, vtLayout, rtti,
@@ -893,7 +893,8 @@ void CIRGenMicrosoftCXXABI::emitVirtualInheritanceTables(
     const CXXRecordDecl *rd) {
   if (!rd->getNumVBases())
     return;
-  cgm.errorNYI(rd->getSourceRange(), "emitVirtualInheritanceTables: MSVC VBTables");
+  cgm.errorNYI(rd->getSourceRange(),
+               "emitVirtualInheritanceTables: MSVC VBTables");
 }
 
 void CIRGenMicrosoftCXXABI::initializeHiddenVirtualInheritanceMembers(
@@ -1002,9 +1003,9 @@ mlir::Value CIRGenMicrosoftCXXABI::performReturnAdjustment(
   if (ra.Virtual.Microsoft.VBIndex) {
     assert(ra.Virtual.Microsoft.VBIndex > 0);
     mlir::Value vbPtr;
-    mlir::Value vbaseOffset = getVBaseOffsetFromVBPtr(
-        cgf, loc, ret, ra.Virtual.Microsoft.VBPtrOffset,
-        ra.Virtual.Microsoft.VBIndex, &vbPtr);
+    mlir::Value vbaseOffset =
+        getVBaseOffsetFromVBPtr(cgf, loc, ret, ra.Virtual.Microsoft.VBPtrOffset,
+                                ra.Virtual.Microsoft.VBIndex, &vbPtr);
     v = cir::PtrStrideOp::create(builder, loc, u8PtrTy, vbPtr, vbaseOffset);
   }
 
@@ -1027,8 +1028,7 @@ mlir::Value CIRGenMicrosoftCXXABI::emitTypeid(CIRGenFunction &cgf,
   cgf.cgm.errorNYI(cgf.getLoc(srcTy->getAsCXXRecordDecl()->getLocation()),
                    "emitTypeid: MSVC ABI");
   return cgf.getBuilder().getNullPtr(
-      typeInfoPtrTy,
-      cgf.getLoc(srcTy->getAsCXXRecordDecl()->getLocation()));
+      typeInfoPtrTy, cgf.getLoc(srcTy->getAsCXXRecordDecl()->getLocation()));
 }
 
 void CIRGenMicrosoftCXXABI::emitBadTypeidCall(CIRGenFunction &cgf,
@@ -1065,16 +1065,14 @@ CIRGenMicrosoftCXXABI::getAddrOfRTTIDescriptor(mlir::Location loc,
   if (auto gv = cgm.getGlobalValue(mangledName))
     return builder.getGlobalViewAttr(voidPtrTy, cast<cir::GlobalOp>(gv));
 
-  cir::GlobalOp gv = cgm.createGlobalOp(
-      loc, mangledName, voidPtrTy, /*isConstant=*/true);
+  cir::GlobalOp gv =
+      cgm.createGlobalOp(loc, mangledName, voidPtrTy, /*isConstant=*/true);
   gv.setLinkage(cir::GlobalLinkageKind::ExternalLinkage);
   return builder.getGlobalViewAttr(voidPtrTy, gv);
 }
 
-CatchTypeInfo
-CIRGenMicrosoftCXXABI::getAddrOfCXXCatchHandlerType(mlir::Location loc,
-                                                    QualType ty,
-                                                    QualType catchHandlerType) {
+CatchTypeInfo CIRGenMicrosoftCXXABI::getAddrOfCXXCatchHandlerType(
+    mlir::Location loc, QualType ty, QualType catchHandlerType) {
   bool isConst, isVolatile, isUnaligned;
   ty = decomposeTypeForEH(cgm.getASTContext(), ty, isConst, isVolatile,
                           isUnaligned);
