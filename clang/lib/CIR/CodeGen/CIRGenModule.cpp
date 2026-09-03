@@ -2993,7 +2993,11 @@ static bool shouldAssumeDSOLocal(const CIRGenModule &cgm,
     // (and this actually happens in the public interface of libstdc++), so
     // such variables can't be marked as DSO local. (Native TLS variables
     // can't be dllimported at all, though.)
-    cgm.errorNYI("shouldAssumeDSOLocal: MinGW");
+    auto globalOp = mlir::dyn_cast<cir::GlobalOp>(gv.getOperation());
+    if (gv.isDeclarationForLinker() && globalOp &&
+        (!globalOp.getTlsModel().has_value() || cgOpts.EmulatedTLS) &&
+        cgOpts.AutoImport)
+      return false;
   }
 
   // On COFF, don't mark 'extern_weak' symbols as DSO local. If these symbols
