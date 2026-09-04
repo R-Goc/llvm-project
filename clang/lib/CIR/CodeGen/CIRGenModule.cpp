@@ -3633,8 +3633,7 @@ cir::FuncOp CIRGenModule::getOrCreateCIRFunction(
   if (isa_and_nonnull<CXXDestructorDecl>(d) &&
       getCXXABI().useThunkForDtorVariant(cast<CXXDestructorDecl>(d),
                                          gd.getDtorType()))
-    errorNYI(d->getSourceRange(),
-             "getOrCreateCIRFunction: MSVC non-base destructor thunk");
+    addDeferredDeclToEmit(gd);
 
   // This is the first use or definition of a mangled name. If there is a
   // deferred decl with this name, remember that we need to emit it at the end

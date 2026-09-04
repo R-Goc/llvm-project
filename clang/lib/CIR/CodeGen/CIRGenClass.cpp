@@ -1036,6 +1036,69 @@ struct CallDtorDelete final : EHScopeStack::Cleanup {
   }
 };
 
+/// Conditionally call operator delete associated with the current destructor
+/// (used by MSVC scalar deleting destructors based on the implicit flag).
+struct CallDtorDeleteConditional final : EHScopeStack::Cleanup {
+  mlir::Value shouldDeleteCondition;
+
+  CallDtorDeleteConditional(mlir::Value shouldDeleteCondition)
+      : shouldDeleteCondition(shouldDeleteCondition) {
+    assert(shouldDeleteCondition != nullptr);
+  }
+
+  void emit(CIRGenFunction &cgf, Flags flags) override {
+    CIRGenBuilderTy &builder = cgf.getBuilder();
+    mlir::Location loc = cgf.getLoc(cgf.curFuncDecl->getLocation());
+
+    // First bit set signals that operator delete must be called.
+    mlir::Value one = builder.getSInt32(1, loc);
+    mlir::Value bit1 =
+        cir::AndOp::create(builder, loc, shouldDeleteCondition, one);
+    mlir::Value zero = builder.getSInt32(0, loc);
+    mlir::Value shouldCallDelete =
+        builder.createCompare(loc, cir::CmpOpKind::ne, bit1, zero);
+
+    cir::IfOp::create(
+        builder, loc, shouldCallDelete, /*withElseRegion=*/false,
+        /*thenBuilder=*/
+        [&](mlir::OpBuilder &b, mlir::Location thenLoc) {
+          const auto *dtor = cast<CXXDestructorDecl>(cgf.curFuncDecl);
+          const CXXRecordDecl *classDecl = dtor->getParent();
+          const FunctionDecl *globOD = dtor->getOperatorGlobalDelete();
+          const FunctionDecl *od = dtor->getOperatorDelete();
+
+          if (globOD && isa<CXXMethodDecl>(od)) {
+            mlir::Value four = builder.getSInt32(4, thenLoc);
+            mlir::Value bit3 =
+                cir::AndOp::create(builder, thenLoc, shouldDeleteCondition, four);
+            mlir::Value isGlobalDelete =
+                builder.createCompare(thenLoc, cir::CmpOpKind::ne, bit3, zero);
+            cir::IfOp::create(
+                builder, thenLoc, isGlobalDelete, /*withElseRegion=*/true,
+                /*thenBuilder=*/
+                [&](mlir::OpBuilder &b2, mlir::Location gloc) {
+                  cgf.emitDeleteCall(
+                      globOD, loadThisForDtorDelete(cgf, dtor),
+                      cgf.getContext().getCanonicalTagType(classDecl));
+                  builder.createYield(gloc);
+                },
+                /*elseBuilder=*/
+                [&](mlir::OpBuilder &b2, mlir::Location cloc) {
+                  cgf.emitDeleteCall(
+                      od, loadThisForDtorDelete(cgf, dtor),
+                      cgf.getContext().getCanonicalTagType(classDecl));
+                  builder.createYield(cloc);
+                });
+          } else {
+            cgf.emitDeleteCall(
+                od, loadThisForDtorDelete(cgf, dtor),
+                cgf.getContext().getCanonicalTagType(classDecl));
+          }
+          builder.createYield(thenLoc);
+        });
+  }
+};
+
 class DestroyField final : public EHScopeStack::Cleanup {
   const FieldDecl *field;
   CIRGenFunction::Destroyer *destroyer;
@@ -1077,8 +1140,8 @@ void CIRGenFunction::enterDtorCleanups(const CXXDestructorDecl *dd,
            "operator delete missing - EnterDtorCleanups");
     if (cxxStructorImplicitParamValue) {
       if (cgm.getTarget().getCXXABI().isMicrosoft()) {
-        cgm.errorNYI(dd->getSourceRange(),
-                     "enterDtorCleanups: MSVC conditional deleting destructor");
+        ehStack.pushCleanup<CallDtorDeleteConditional>(
+            NormalAndEHCleanup, cxxStructorImplicitParamValue);
       } else {
         cgm.errorNYI(dd->getSourceRange(), "deleting destructor with vtt");
       }

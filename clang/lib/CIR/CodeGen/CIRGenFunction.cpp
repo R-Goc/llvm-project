@@ -908,7 +908,7 @@ void CIRGenFunction::emitDestructorBody(FunctionArgList &args) {
   }
 
   Stmt *body = dtor->getBody();
-  assert(body && !cir::MissingFeatures::incrementProfileCounter());
+  assert(!cir::MissingFeatures::incrementProfileCounter());
 
   // The call to operator delete in a deleting destructor happens
   // outside of the function-try-block, which means it's always
