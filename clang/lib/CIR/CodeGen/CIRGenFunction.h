@@ -2238,7 +2238,8 @@ public:
                                         const FunctionArgList &args);
 
   void emitDeleteCall(const FunctionDecl *deleteFD, mlir::Value ptr,
-                      QualType deleteTy);
+                      QualType deleteTy, mlir::Value numElements = nullptr,
+                      CharUnits cookieSize = CharUnits::Zero());
 
   mlir::LogicalResult emitDoStmt(const clang::DoStmt &s);
 
