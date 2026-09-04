@@ -66,6 +66,7 @@ static QualType decomposeTypeForEH(ASTContext &context, QualType t,
 class CIRGenMicrosoftCXXABI : public CIRGenCXXABI {
   using VFTableIdTy = std::pair<const CXXRecordDecl *, CharUnits>;
   llvm::DenseMap<VFTableIdTy, cir::GlobalOp> vftablesMap;
+  llvm::SmallPtrSet<const CXXRecordDecl *, 4> deferredVFTables;
 
   MicrosoftMangleContext &getMangleContext() {
     return *cast<MicrosoftMangleContext>(mangleContext.get());
@@ -86,17 +87,7 @@ public:
   }
 
   bool hasMostDerivedReturn(clang::GlobalDecl gd) const override {
-    return false;
-  }
-
-  size_t getSrcArgforCopyCtor(const CXXConstructorDecl *cd,
-                              FunctionArgList &args) const override {
-    assert(args.size() >= 2 &&
-           "expected the arglist to have at least two args!");
-    if (cd->getParent()->getNumVBases() > 0 &&
-        cd->getType()->castAs<FunctionProtoType>()->isVariadic())
-      return 2;
-    return 1;
+    return isDeletingDtor(gd);
   }
 
   llvm::StringRef getPureVirtualCallName() override { return "_purecall"; }
@@ -501,8 +492,13 @@ void CIRGenMicrosoftCXXABI::emitInstanceFunctionProlog(SourceLocation loc,
   setCXXABIThisValue(cgf, thisVal);
 
   if (hasThisReturn(cgf.curGD) || hasMostDerivedReturn(cgf.curGD)) {
-    if (cgf.returnValue.isValid())
-      cgf.getBuilder().createStore(cgf.getLoc(loc), thisVal, cgf.returnValue);
+    if (cgf.returnValue.isValid()) {
+      mlir::Value retVal = thisVal;
+      if (hasMostDerivedReturn(cgf.curGD))
+        retVal = cgf.getBuilder().createBitcast(
+            retVal, cgf.getBuilder().getVoidPtrTy());
+      cgf.getBuilder().createStore(cgf.getLoc(loc), retVal, cgf.returnValue);
+    }
   }
 
   if (isa<CXXConstructorDecl>(md) && md->getParent()->getNumVBases()) {
@@ -573,10 +569,13 @@ void CIRGenMicrosoftCXXABI::emitCXXStructor(GlobalDecl gd) {
       dtor->getParent()->getNumVBases() == 0)
     gd = gd.getWithDtorType(Dtor_Base);
 
-  if (gd.getDtorType() == Dtor_Deleting ||
-      gd.getDtorType() == Dtor_VectorDeleting) {
-    cgm.errorNYI(dtor->getSourceRange(),
-                 "emitCXXStructor: MSVC deleting destructor");
+  if (gd.getDtorType() == Dtor_VectorDeleting) {
+    GlobalDecl scalarDtorGD(dtor, Dtor_Deleting);
+    auto aliasee = cast<cir::FuncOp>(cgm.getAddrOfGlobal(scalarDtorGD));
+    StringRef mangledName = cgm.getMangledName(gd);
+    auto entry = cast_or_null<cir::FuncOp>(cgm.getGlobalValue(mangledName));
+    cgm.emitAliasForGlobal(mangledName, entry, gd, aliasee,
+                           cir::GlobalLinkageKind::LinkOnceODRLinkage);
     return;
   }
 
@@ -777,6 +776,9 @@ cir::GlobalOp CIRGenMicrosoftCXXABI::getAddrOfVTable(const CXXRecordDecl *rd,
     return nullptr;
   }
   const std::unique_ptr<VPtrInfo> &vfptr = *vfptrI;
+
+  if (deferredVFTables.insert(rd).second)
+    cgm.addDeferredVTable(rd);
 
   SmallString<256> vftableName;
   {
