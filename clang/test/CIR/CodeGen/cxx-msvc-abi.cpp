@@ -124,3 +124,32 @@ void delete_virtual(Shape *s) {
 // CIR:   %[[VFN_SLOT:.*]] = cir.vtable.get_virtual_fn_addr %[[VTABLE_PTR]][0]
 // CIR:   %[[VFN:.*]] = cir.load align(8) %[[VFN_SLOT]]
 // CIR:   cir.call %[[VFN]](%{{.*}}, %[[FLAG]])
+
+// When a class with a virtual destructor is defined, its scalar deleting
+// destructor thunk (??_G) and vector deleting destructor alias (??_E) are emitted.
+class HasVirtualDtor {
+public:
+  HasVirtualDtor();
+  virtual ~HasVirtualDtor();
+};
+
+HasVirtualDtor::HasVirtualDtor() {}
+HasVirtualDtor::~HasVirtualDtor() {}
+
+// Scalar deleting destructor definition:
+// CIR-LABEL: cir.func {{.*}} @"??_GHasVirtualDtor@@UEAAPEAXI@Z"(
+// CIR-SAME: %[[THIS_ARG:.*]]: !cir.ptr<!rec_HasVirtualDtor>{{.*}}, %[[FLAG_ARG:.*]]: !s32i{{.*}}) -> (!cir.ptr<!void>
+// CIR:   %[[RETVAL:.*]] = cir.alloca "__retval"
+// CIR:   cir.store {{.*}}%[[RETVAL]]
+// CIR:   cir.call @"??1HasVirtualDtor@@UEAA@XZ"(%{{.*}})
+// CIR:   %[[ONE:.*]] = cir.const #cir.int<1> : !s32i
+// CIR:   %[[AND:.*]] = cir.and %{{.*}}, %[[ONE]] : !s32i
+// CIR:   %[[ZERO:.*]] = cir.const #cir.int<0> : !s32i
+// CIR:   %[[COND:.*]] = cir.cmp ne %[[AND]], %[[ZERO]] : !s32i
+// CIR:   cir.if %[[COND]] {
+// CIR:     cir.call @{{.*}}3@{{.*}}(
+// CIR:   }
+// CIR:   %[[RES:.*]] = cir.load %[[RETVAL]]
+// CIR:   cir.return %[[RES]] : !cir.ptr<!void>
+
+// CIR: cir.func {{.*}} @"??_EHasVirtualDtor@@UEAAPEAXI@Z"(!cir.ptr<!rec_HasVirtualDtor>, !s32i) -> !cir.ptr<!void> alias(@"??_GHasVirtualDtor@@UEAAPEAXI@Z")
