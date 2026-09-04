@@ -136,6 +136,71 @@ public:
 HasVirtualDtor::HasVirtualDtor() {}
 HasVirtualDtor::~HasVirtualDtor() {}
 
+// When a class with a virtual destructor is used with delete[], its vector
+// deleting destructor (??_E) is emitted as a real function instead of an alias,
+// and the delete[] expression reads the array cookie.
+class HasVectorDtor {
+public:
+  HasVectorDtor();
+  virtual ~HasVectorDtor();
+};
+
+HasVectorDtor::HasVectorDtor() {}
+HasVectorDtor::~HasVectorDtor() {}
+
+void delete_array_virtual(HasVectorDtor *p) {
+  delete[] p;
+}
+
+// CIR-LABEL: cir.func {{.*}} @"?delete_array_virtual@@YAXPEAVHasVectorDtor@@@Z"(
+// CIR:   %[[COOKIE_OFFSET:.*]] = cir.const #cir.int<-8> : !s32i
+// CIR:   %[[COOKIE_PTR:.*]] = cir.ptr_stride %{{.*}}, %[[COOKIE_OFFSET]] : (!cir.ptr<!u8i>, !s32i) -> !cir.ptr<!u8i>
+// CIR:   %[[COOKIE_SIZE_PTR:.*]] = cir.cast bitcast %[[COOKIE_PTR]] : !cir.ptr<!u8i> -> !cir.ptr<!u64i>
+// CIR:   %[[NUM_ELTS:.*]] = cir.load align(8) %[[COOKIE_SIZE_PTR]]
+// CIR:   %[[ZERO:.*]] = cir.const #cir.int<0> : !u64i
+// CIR:   %[[IS_EMPTY:.*]] = cir.cmp eq %[[NUM_ELTS]], %[[ZERO]] : !u64i
+// CIR:   cir.if %[[IS_EMPTY]] {
+// CIR:     cir.call @"??_V@YAXPEAX_K@Z"(%{{.*}})
+// CIR:   } else {
+// CIR:     %[[FLAGS:.*]] = cir.const #cir.int<3> : !s32i
+// CIR:     %[[VPTR:.*]] = cir.vtable.get_vptr
+// CIR:     %[[VTABLE:.*]] = cir.load align(8) %[[VPTR]]
+// CIR:     %[[VFN_SLOT:.*]] = cir.vtable.get_virtual_fn_addr %[[VTABLE]][0]
+// CIR:     %[[VFN:.*]] = cir.load align(8) %[[VFN_SLOT]]
+// CIR:     cir.call %[[VFN]](%{{.*}}, %[[FLAGS]])
+// CIR:   }
+
+// Vector deleting destructor definition with array destroy and conditional delete:
+// CIR-LABEL: cir.func {{.*}} @"??_EHasVectorDtor@@UEAAPEAXI@Z"(
+// CIR:   %[[TWO:.*]] = cir.const #cir.int<2> : !s32i
+// CIR:   %[[AND_VEC:.*]] = cir.and %{{.*}}, %[[TWO]] : !s32i
+// CIR:   %[[IS_VEC:.*]] = cir.cmp ne %[[AND_VEC]], %{{.*}} : !s32i
+// CIR:   cir.if %[[IS_VEC]] {
+// CIR:     %[[COOKIE_OFFSET:.*]] = cir.const #cir.int<-8> : !s32i
+// CIR:     %[[ALLOC_PTR:.*]] = cir.ptr_stride %{{.*}}, %[[COOKIE_OFFSET]] : (!cir.ptr<!u8i>, !s32i) -> !cir.ptr<!u8i>
+// CIR:     %[[NUM_ELTS_PTR:.*]] = cir.cast bitcast %[[ALLOC_PTR]] : !cir.ptr<!u8i> -> !cir.ptr<!u64i>
+// CIR:     %[[NUM_ELTS:.*]] = cir.load align(8) %[[NUM_ELTS_PTR]]
+// CIR:     cir.do {
+// CIR:       cir.call @"??1HasVectorDtor@@UEAA@XZ"(
+// CIR:       cir.yield
+// CIR:     }
+// CIR:     %[[ONE:.*]] = cir.const #cir.int<1> : !s32i
+// CIR:     %[[AND_DEL:.*]] = cir.and %{{.*}}, %[[ONE]] : !s32i
+// CIR:     %[[SHOULD_DEL:.*]] = cir.cmp ne %[[AND_DEL]], %{{.*}} : !s32i
+// CIR:     cir.if %[[SHOULD_DEL]] {
+// CIR:       cir.call @"??_V@YAXPEAX_K@Z"(%{{.*}})
+// CIR:     }
+// CIR:   } else {
+// CIR:     cir.call @"??1HasVectorDtor@@UEAA@XZ"(
+// CIR:     %[[ONE:.*]] = cir.const #cir.int<1> : !s32i
+// CIR:     %[[AND_DEL:.*]] = cir.and %{{.*}}, %[[ONE]] : !s32i
+// CIR:     %[[SHOULD_DEL:.*]] = cir.cmp ne %[[AND_DEL]], %{{.*}} : !s32i
+// CIR:     cir.if %[[SHOULD_DEL]] {
+// CIR:       cir.call @{{.*}}3@{{.*}}(
+// CIR:     }
+// CIR:   }
+// CIR:   cir.return %{{.*}} : !cir.ptr<!void>
+
 // Scalar deleting destructor definition:
 // CIR-LABEL: cir.func {{.*}} @"??_GHasVirtualDtor@@UEAAPEAXI@Z"(
 // CIR-SAME: %[[THIS_ARG:.*]]: !cir.ptr<!rec_HasVirtualDtor>{{.*}}, %[[FLAG_ARG:.*]]: !s32i{{.*}}) -> (!cir.ptr<!void>

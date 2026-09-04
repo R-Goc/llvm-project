@@ -103,3 +103,33 @@ void CIRGenCXXABI::emitReturnFromThunk(CIRGenFunction &cgf, RValue rv,
   mlir::Location loc = cgf.getBuilder().getUnknownLoc();
   cgf.emitReturnOfRValue(loc, rv, resultType);
 }
+
+void CIRGenCXXABI::readArrayCookie(CIRGenFunction &cgf, Address ptr,
+                                   QualType eltTy, mlir::Value &numElements,
+                                   mlir::Value &allocPtr,
+                                   CharUnits &cookieSize) {
+  assert(eltTy.isDestructedType());
+  ptr = ptr.withElementType(cgf.getBuilder(), cgf.cgm.getBuilder().getUInt8Ty());
+  cookieSize = getArrayCookieSizeImpl(eltTy);
+  mlir::Location loc = cgf.getLoc(SourceLocation());
+  mlir::Value negOffset =
+      cgf.getBuilder().getSInt32(-cookieSize.getQuantity(), loc);
+  mlir::Value allocBytePtr =
+      cgf.getBuilder().createPtrStride(loc, ptr.getPointer(), negOffset);
+  Address allocAddr(allocBytePtr, cgf.getBuilder().getUInt8Ty(),
+                    ptr.getAlignment().alignmentAtOffset(cookieSize));
+  allocPtr = allocBytePtr;
+  numElements = readArrayCookieImpl(cgf, allocAddr, cookieSize);
+}
+
+mlir::Value CIRGenCXXABI::readArrayCookieImpl(CIRGenFunction &cgf, Address ptr,
+                                              CharUnits cookieSize) {
+  cgm.errorNYI("reading a new[] cookie");
+  return nullptr;
+}
+
+void CIRGenCXXABI::emitConditionalArrayDtorCall(
+    CIRGenFunction &cgf, const CXXDestructorDecl *dd,
+    mlir::Value shouldDeleteCondition) {
+  llvm_unreachable("vector deleting destructors not supported in this ABI");
+}
