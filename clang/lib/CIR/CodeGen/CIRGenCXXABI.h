@@ -104,7 +104,7 @@ public:
   /// initialized with the type of 'this'.
   virtual AddedStructorArgCounts
   buildStructorSignature(GlobalDecl gd,
-                         llvm::SmallVectorImpl<CanQualType> &argTys) = 0;
+                         SmallVectorImpl<CanQualType> &argTys) = 0;
 
   AddedStructorArgCounts
   addImplicitConstructorArgs(CIRGenFunction &cgf, const CXXConstructorDecl *d,
@@ -235,6 +235,8 @@ public:
   /// Emit any tables needed to implement virtual inheritance.  For Itanium,
   /// this emits virtual table tables.
   virtual void emitVirtualInheritanceTables(const CXXRecordDecl *rd) = 0;
+
+  virtual void emitVBPtrStores(CIRGenFunction &cgf, const CXXRecordDecl *rd) {}
 
   /// Returns true if the thunk should be exported.
   virtual bool exportThunk() = 0;

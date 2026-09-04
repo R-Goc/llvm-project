@@ -42,7 +42,7 @@ struct CIRRecordLowering final {
   // member type that ensures correct rounding.
   struct MemberInfo final {
     CharUnits offset;
-    enum class InfoKind { VFPtr, Field, Base, VBase } kind;
+    enum class InfoKind { VFPtr, VBPtr, Field, Base, VBase } kind;
     mlir::Type data;
     /// What this member holds, recorded on the CIR record type.
     cir::RecordMemberKind memberKind;
@@ -111,6 +111,7 @@ struct CIRRecordLowering final {
                       RecordDecl::field_iterator fieldEnd);
 
   mlir::Type getVFPtrType();
+  mlir::Type getVBPtrType();
 
   bool isAAPCS() const {
     return astContext.getTargetInfo().getABI().starts_with("aapcs");
@@ -1255,10 +1256,15 @@ void CIRRecordLowering::accumulateVPtrs() {
                                  getVFPtrType(), cir::RecordMemberKind::Data));
 
   if (astRecordLayout.hasOwnVBPtr())
-    cirGenTypes.getCGModule().errorNYI(recordDecl->getSourceRange(),
-                                       "accumulateVPtrs: hasOwnVBPtr");
+    members.push_back(
+        MemberInfo(astRecordLayout.getVBPtrOffset(), MemberInfo::InfoKind::VBPtr,
+                   getVBPtrType(), cir::RecordMemberKind::Data));
 }
 
 mlir::Type CIRRecordLowering::getVFPtrType() {
+  return cir::VPtrType::get(builder.getContext());
+}
+
+mlir::Type CIRRecordLowering::getVBPtrType() {
   return cir::VPtrType::get(builder.getContext());
 }

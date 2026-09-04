@@ -312,12 +312,6 @@ void CIRGenFunction::emitCtorPrologue(const CXXConstructorDecl *cd,
   bool constructVBases = ctorType != Ctor_Base &&
                          classDecl->getNumVBases() != 0 &&
                          !classDecl->isAbstract();
-  if (constructVBases &&
-      !cgm.getTarget().getCXXABI().hasConstructorVariants()) {
-    cgm.errorNYI(cd->getSourceRange(),
-                 "emitCtorPrologue: virtual base without variants");
-    return;
-  }
 
   // Create three separate ranges for the different types of initializers.
   auto allInits = cd->inits();
@@ -354,13 +348,30 @@ void CIRGenFunction::emitCtorPrologue(const CXXConstructorDecl *cd,
   };
 
   // Process virtual base initializers.
-  for (CXXCtorInitializer *virtualBaseInit : virtualBaseInits) {
-    if (!constructVBases)
-      continue;
-    emitInitializer(virtualBaseInit);
+  if (constructVBases) {
+    if (!cgm.getTarget().getCXXABI().hasConstructorVariants()) {
+      assert(cxxStructorImplicitParamValue &&
+             "ctor for class with virtual bases must have implicit param");
+      CIRGenBuilderTy &builder = getBuilder();
+      mlir::Location loc = getLoc(cd->getLocation());
+      mlir::Value zero =
+          builder.getConstInt(loc, cxxStructorImplicitParamValue.getType(), 0);
+      mlir::Value isMostDerived = builder.createCompare(
+          loc, cir::CmpOpKind::ne, cxxStructorImplicitParamValue, zero);
+      cir::IfOp::create(
+          builder, loc, isMostDerived, /*withElseRegion=*/false,
+          /*thenBuilder=*/
+          [&](mlir::OpBuilder &b, mlir::Location thenLoc) {
+            cgm.getCXXABI().emitVBPtrStores(*this, classDecl);
+            for (CXXCtorInitializer *virtualBaseInit : virtualBaseInits)
+              emitInitializer(virtualBaseInit);
+            builder.createYield(thenLoc);
+          });
+    } else {
+      for (CXXCtorInitializer *virtualBaseInit : virtualBaseInits)
+        emitInitializer(virtualBaseInit);
+    }
   }
-
-  assert(!cir::MissingFeatures::msabi());
 
   // Then, non-virtual base initializers.
   for (CXXCtorInitializer *nonVirtualBaseInit : nonVirtualBaseInits) {
