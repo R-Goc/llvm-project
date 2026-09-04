@@ -132,6 +132,9 @@ public:
                                 mlir::Value numElements, const CXXNewExpr *e,
                                 QualType elementType) override;
 
+  mlir::Value readArrayCookieImpl(CIRGenFunction &cgf, Address allocPtr,
+                                  CharUnits cookieSize) override;
+
   cir::GlobalLinkageKind
   getCXXDestructorLinkage(GVALinkage linkage, const CXXDestructorDecl *dtor,
                           CXXDtorType dt) const override {
@@ -228,6 +231,10 @@ public:
   void emitVirtualObjectDelete(CIRGenFunction &cgf, const CXXDeleteExpr *de,
                                Address ptr, QualType elementType,
                                const CXXDestructorDecl *dtor) override;
+
+  void emitConditionalArrayDtorCall(CIRGenFunction &cgf,
+                                    const CXXDestructorDecl *dd,
+                                    mlir::Value shouldDeleteCondition) override;
 
   size_t getSrcArgforCopyCtor(const CXXConstructorDecl *cd,
                               FunctionArgList &args) const override {
@@ -410,6 +417,15 @@ Address CIRGenMicrosoftCXXABI::initializeArrayCookie(CIRGenFunction &cgf,
   return Address(finalPtr, newPtr.getElementType(), finalAlignment);
 }
 
+mlir::Value
+CIRGenMicrosoftCXXABI::readArrayCookieImpl(CIRGenFunction &cgf, Address allocPtr,
+                                           CharUnits cookieSize) {
+  Address numElementsPtr =
+      allocPtr.withElementType(cgf.getBuilder(), cgf.sizeTy);
+  return cgf.getBuilder().createLoad(cgf.getLoc(SourceLocation()),
+                                     numElementsPtr);
+}
+
 CIRGenCXXABI::AddedStructorArgCounts
 CIRGenMicrosoftCXXABI::buildStructorSignature(
     GlobalDecl gd, llvm::SmallVectorImpl<CanQualType> &argTys) {
@@ -570,13 +586,15 @@ void CIRGenMicrosoftCXXABI::emitCXXStructor(GlobalDecl gd) {
     gd = gd.getWithDtorType(Dtor_Base);
 
   if (gd.getDtorType() == Dtor_VectorDeleting) {
-    GlobalDecl scalarDtorGD(dtor, Dtor_Deleting);
-    auto aliasee = cast<cir::FuncOp>(cgm.getAddrOfGlobal(scalarDtorGD));
-    StringRef mangledName = cgm.getMangledName(gd);
-    auto entry = cast_or_null<cir::FuncOp>(cgm.getGlobalValue(mangledName));
-    cgm.emitAliasForGlobal(mangledName, entry, gd, aliasee,
-                           cir::GlobalLinkageKind::LinkOnceODRLinkage);
-    return;
+    if (!cgm.classNeedsVectorDestructor(dtor->getParent())) {
+      GlobalDecl scalarDtorGD(dtor, Dtor_Deleting);
+      auto aliasee = cast<cir::FuncOp>(cgm.getAddrOfGlobal(scalarDtorGD));
+      StringRef mangledName = cgm.getMangledName(gd);
+      auto entry = cast_or_null<cir::FuncOp>(cgm.getGlobalValue(mangledName));
+      cgm.emitAliasForGlobal(mangledName, entry, gd, aliasee,
+                             cir::GlobalLinkageKind::LinkOnceODRLinkage);
+      return;
+    }
   }
 
   auto fn = cgm.codegenCXXStructor(gd);
@@ -658,7 +676,144 @@ void CIRGenMicrosoftCXXABI::emitVirtualObjectDelete(
         "emitVirtualObjectDelete: legacy global delete without deleting dtor flag");
     return;
   }
+
+  if (de && de->isArrayForm()) {
+    mlir::Value numElements = nullptr;
+    mlir::Value allocatedPtr = nullptr;
+    CharUnits cookieSize;
+    readArrayCookie(cgf, ptr, elementType, numElements, allocatedPtr,
+                    cookieSize);
+
+    CIRGenBuilderTy &builder = cgf.getBuilder();
+    mlir::Location loc = cgf.getLoc(de->getSourceRange());
+    mlir::Value zero = builder.getConstInt(loc, numElements.getType(), 0);
+    mlir::Value isEmpty =
+        builder.createCompare(loc, cir::CmpOpKind::eq, numElements, zero);
+
+    cir::IfOp::create(
+        builder, loc, isEmpty, /*withElseRegion=*/true,
+        /*thenBuilder=*/
+        [&](mlir::OpBuilder &b, mlir::Location l) {
+          cgf.emitDeleteCall(de->getOperatorDelete(), allocatedPtr, elementType,
+                             numElements, cookieSize);
+          builder.createYield(l);
+        },
+        /*elseBuilder=*/
+        [&](mlir::OpBuilder &b, mlir::Location l) {
+          emitVirtualDestructorCall(cgf, dtor, Dtor_Deleting, ptr, de);
+          builder.createYield(l);
+        });
+    return;
+  }
+
   emitVirtualDestructorCall(cgf, dtor, Dtor_Deleting, ptr, de);
+}
+
+void CIRGenMicrosoftCXXABI::emitConditionalArrayDtorCall(
+    CIRGenFunction &cgf, const CXXDestructorDecl *dd,
+    mlir::Value shouldDeleteCondition) {
+  CIRGenBuilderTy &builder = cgf.getBuilder();
+  mlir::Location loc = cgf.getLoc(dd->getLocation());
+  Address thisPtr = cgf.loadCXXThisAddress();
+
+  // Condition bit 2 (value 2) indicates an array delete.
+  mlir::Value two = builder.getSInt32(2, loc);
+  mlir::Value bit2 =
+      cir::AndOp::create(builder, loc, shouldDeleteCondition, two);
+  mlir::Value zero = builder.getSInt32(0, loc);
+  mlir::Value shouldDestroyArray =
+      builder.createCompare(loc, cir::CmpOpKind::ne, bit2, zero);
+
+  cir::IfOp::create(
+      builder, loc, shouldDestroyArray, /*withElseRegion=*/true,
+      /*thenBuilder=*/
+      [&](mlir::OpBuilder &b, mlir::Location l) {
+        QualType eltTy = dd->getThisType()->getPointeeType();
+        mlir::Value numElements = nullptr;
+        mlir::Value allocatedPtr = nullptr;
+        CharUnits cookieSize;
+        readArrayCookie(cgf, thisPtr, eltTy, numElements, allocatedPtr,
+                        cookieSize);
+
+        QualType::DestructionKind dtorKind = eltTy.isDestructedType();
+        assert(dtorKind);
+        assert(numElements && "no element count for a type with a destructor!");
+
+        CharUnits elementSize = cgf.getContext().getTypeSizeInChars(eltTy);
+        CharUnits elementAlign =
+            thisPtr.getAlignment().alignmentOfArrayElement(elementSize);
+
+        cgf.emitArrayDestroy(thisPtr.getPointer(), numElements, eltTy,
+                             elementAlign, cgf.getDestroyer(dtorKind));
+
+        // Bit 1 (value 1) indicates whether to call operator delete[].
+        mlir::Value one = builder.getSInt32(1, l);
+        mlir::Value bit1 =
+            cir::AndOp::create(builder, l, shouldDeleteCondition, one);
+        mlir::Value shouldCallDelete =
+            builder.createCompare(l, cir::CmpOpKind::ne, bit1, zero);
+
+        cir::IfOp::create(
+            builder, l, shouldCallDelete, /*withElseRegion=*/false,
+            /*thenBuilder=*/
+            [&](mlir::OpBuilder &b2, mlir::Location l2) {
+              const CXXRecordDecl *classDecl = dd->getParent();
+              if (const FunctionDecl *arrOD = dd->getArrayOperatorDelete()) {
+                const FunctionDecl *globArrOD =
+                    dd->getGlobalArrayOperatorDelete();
+                if (globArrOD && isa<CXXMethodDecl>(arrOD)) {
+                  mlir::Value four = builder.getSInt32(4, l2);
+                  mlir::Value bit3 = cir::AndOp::create(
+                      builder, l2, shouldDeleteCondition, four);
+                  mlir::Value isGlobalDelete = builder.createCompare(
+                      l2, cir::CmpOpKind::ne, bit3, zero);
+                  cir::IfOp::create(
+                      builder, l2, isGlobalDelete, /*withElseRegion=*/true,
+                      /*thenBuilder=*/
+                      [&](mlir::OpBuilder &b3, mlir::Location gloc) {
+                        cgf.emitDeleteCall(
+                            globArrOD, allocatedPtr,
+                            cgf.getContext().getCanonicalTagType(classDecl),
+                            numElements, cookieSize);
+                        builder.createYield(gloc);
+                      },
+                      /*elseBuilder=*/
+                      [&](mlir::OpBuilder &b3, mlir::Location cloc) {
+                        cgf.emitDeleteCall(
+                            arrOD, allocatedPtr,
+                            cgf.getContext().getCanonicalTagType(classDecl),
+                            numElements, cookieSize);
+                        builder.createYield(cloc);
+                      });
+                } else {
+                  cgf.emitDeleteCall(
+                      arrOD, allocatedPtr,
+                      cgf.getContext().getCanonicalTagType(classDecl),
+                      numElements, cookieSize);
+                }
+              } else {
+                cgf.emitTrap(l2, true);
+              }
+              builder.createYield(l2);
+            });
+
+        builder.createYield(l);
+      },
+      /*elseBuilder=*/
+      [&](mlir::OpBuilder &b, mlir::Location l) {
+        {
+          CIRGenFunction::RunCleanupsScope dtorEpilogue(cgf);
+          cgf.enterDtorCleanups(dd, Dtor_Deleting);
+          if (cgf.haveInsertPoint()) {
+            QualType thisTy = dd->getFunctionObjectParameterType();
+            cgf.emitCXXDestructorCall(dd, Dtor_Complete,
+                                      /*forVirtualBase=*/false,
+                                      /*delegating=*/false,
+                                      cgf.loadCXXThisAddress(), thisTy);
+          }
+        }
+        builder.createYield(l);
+      });
 }
 
 const CXXRecordDecl *

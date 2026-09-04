@@ -915,8 +915,11 @@ void CIRGenFunction::emitDestructorBody(FunctionArgList &args) {
   // possible to delegate the destructor body to the complete
   // destructor.  Do so.
   if (dtorType == Dtor_Deleting || dtorType == Dtor_VectorDeleting) {
-    if (cxxStructorImplicitParamValue && dtorType == Dtor_VectorDeleting)
-      cgm.errorNYI(dtor->getSourceRange(), "emitConditionalArrayDtorCall");
+    if (cxxStructorImplicitParamValue && dtorType == Dtor_VectorDeleting) {
+      cgm.getCXXABI().emitConditionalArrayDtorCall(
+          *this, dtor, cxxStructorImplicitParamValue);
+      return;
+    }
     RunCleanupsScope dtorEpilogue(*this);
     enterDtorCleanups(dtor, Dtor_Deleting);
     if (haveInsertPoint()) {

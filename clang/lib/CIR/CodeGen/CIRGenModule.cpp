@@ -4479,3 +4479,50 @@ void CIRGenModule::emitGlobalAnnotations() {
   }
   deferredAnnotations.clear();
 }
+
+bool CIRGenModule::classNeedsVectorDestructor(const CXXRecordDecl *rd) {
+  if (!getASTContext().getTargetInfo().emitVectorDeletingDtors(
+          getASTContext().getLangOpts()))
+    return false;
+  CXXDestructorDecl *dtor = rd->getDestructor();
+  if (dtor && dtor->isVirtual() && dtor->hasAttr<DLLExportAttr>())
+    return true;
+
+  return requireVectorDeletingDtor.count(rd);
+}
+
+void CIRGenModule::requireVectorDestructorDefinition(const CXXRecordDecl *rd) {
+  if (!getASTContext().getTargetInfo().emitVectorDeletingDtors(
+          getASTContext().getLangOpts()))
+    return;
+  if (!requireVectorDeletingDtor.insert(rd).second)
+    return;
+
+  CXXDestructorDecl *dtorD = rd->getDestructor();
+  if (!dtorD || !dtorD->isVirtual())
+    return;
+
+  GlobalDecl scalarDtorGD(dtorD, Dtor_Deleting);
+  StringRef mangledName = getMangledName(scalarDtorGD);
+  mlir::Operation *entry = getGlobalValue(mangledName);
+  GlobalDecl vectorDtorGD(dtorD, Dtor_VectorDeleting);
+  if (entry) {
+    if (auto cirFunc = dyn_cast<cir::FuncOp>(entry)) {
+      if (!cirFunc.isDeclaration()) {
+        StringRef vdName = getMangledName(vectorDtorGD);
+        mlir::Operation *vdEntry = getGlobalValue(vdName);
+        if (vdEntry) {
+          if (auto vdFunc = dyn_cast<cir::FuncOp>(vdEntry)) {
+            if (vdFunc.getAliasee().has_value()) {
+              eraseGlobalSymbol(vdEntry);
+              vdEntry->erase();
+              eraseGlobalSymbol(entry);
+              entry->erase();
+            }
+          }
+        }
+      }
+    }
+  }
+  addDeferredDeclToEmit(vectorDtorGD);
+}

@@ -1281,8 +1281,9 @@ void CIRGenFunction::emitNewArrayInitializer(
                                cce->requiresZeroInitialization(), endOfInit);
     if (getContext().getTargetInfo().emitVectorDeletingDtors(
             getContext().getLangOpts())) {
-      cgm.errorNYI(e->getSourceRange(),
-                   "emitNewArrayInitializer: emitVectorDeletingDtors");
+      CXXDestructorDecl *dtor = ctor->getParent()->getDestructor();
+      if (dtor && dtor->isVirtual())
+        cgm.requireVectorDestructorDefinition(ctor->getParent());
     }
     return;
   }
@@ -1523,8 +1524,10 @@ void CIRGenFunction::emitCXXDeleteExpr(const CXXDeleteExpr *e) {
       if (rd->hasDefinition() && !rd->hasTrivialDestructor()) {
         const auto *dtor = rd->getDestructor();
         if (dtor && dtor->isVirtual()) {
-          cgm.errorNYI(e->getSourceRange(),
-                       "emitCXXDeleteExpr: emitVectorDeletingDtors");
+          cgm.requireVectorDestructorDefinition(rd);
+          cgm.getCXXABI().emitVirtualObjectDelete(*this, e, ptr, deleteTy,
+                                                  dtor);
+          return;
         }
       }
     }
@@ -1830,7 +1833,9 @@ mlir::Value CIRGenFunction::emitCXXNewExpr(const CXXNewExpr *e) {
 }
 
 void CIRGenFunction::emitDeleteCall(const FunctionDecl *deleteFD,
-                                    mlir::Value ptr, QualType deleteTy) {
+                                    mlir::Value ptr, QualType deleteTy,
+                                    mlir::Value numElements,
+                                    CharUnits cookieSize) {
   assert(!cir::MissingFeatures::deleteArray());
 
   const auto *deleteFTy = deleteFD->getType()->castAs<FunctionProtoType>();
@@ -1860,15 +1865,30 @@ void CIRGenFunction::emitDeleteCall(const FunctionDecl *deleteFD,
     deleteArgs.add(RValue::getAggregate(tagAddr), tagType);
   }
 
+  mlir::Location loc = currSrcLoc ? *currSrcLoc : ptr.getLoc();
+
   // Pass the size if the delete function has a size_t parameter.
   if (params.Size) {
     QualType sizeType = *paramTypeIter;
     std::advance(paramTypeIter, 1);
     CharUnits deleteTypeSize = getContext().getTypeSizeInChars(deleteTy);
-    assert(mlir::isa<cir::IntType>(convertType(sizeType)) &&
+    mlir::Type cirSizeType = convertType(sizeType);
+    assert(mlir::isa<cir::IntType>(cirSizeType) &&
            "expected cir::IntType");
-    cir::ConstantOp size = builder.getConstInt(
-        *currSrcLoc, convertType(sizeType), deleteTypeSize.getQuantity());
+    mlir::Value size = builder.getConstInt(
+        loc, cirSizeType, deleteTypeSize.getQuantity());
+
+    if (numElements) {
+      if (numElements.getType() != cirSizeType)
+        numElements = builder.createIntCast(numElements, cirSizeType);
+      size = builder.createMul(loc, size, numElements);
+    }
+
+    if (!cookieSize.isZero()) {
+      mlir::Value cookieSizeVal = builder.getConstInt(
+          loc, cirSizeType, cookieSize.getQuantity());
+      size = builder.createAdd(loc, size, cookieSizeVal);
+    }
 
     deleteArgs.add(RValue::get(size), sizeType);
   }
@@ -1880,7 +1900,7 @@ void CIRGenFunction::emitDeleteCall(const FunctionDecl *deleteFD,
         getContext().toCharUnitsFromBits(getContext().getTypeAlignIfKnown(
             deleteTy, /*NeedsPreferredAlignment=*/true));
     cir::ConstantOp align = builder.getAlignment(
-        *currSrcLoc, convertType(alignValType), deleteTypeAlign);
+        loc, convertType(alignValType), deleteTypeAlign);
     deleteArgs.add(RValue::get(align), alignValType);
   }
 

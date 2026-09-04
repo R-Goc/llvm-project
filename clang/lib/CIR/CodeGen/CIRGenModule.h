@@ -565,6 +565,10 @@ public:
     deferredDeclsToEmit.emplace_back(GD);
   }
 
+  llvm::SmallPtrSet<const clang::CXXRecordDecl *, 16> requireVectorDeletingDtor;
+  bool classNeedsVectorDestructor(const clang::CXXRecordDecl *rd);
+  void requireVectorDestructorDefinition(const clang::CXXRecordDecl *rd);
+
   void emitTopLevelDecl(clang::Decl *decl);
 
   /// Determine whether the definition must be emitted; if this returns \c
