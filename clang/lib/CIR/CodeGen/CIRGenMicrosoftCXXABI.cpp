@@ -173,6 +173,8 @@ public:
     llvm_unreachable("invalid dtor type");
   }
 
+  std::vector<CharUnits> getVBPtrOffsets(const CXXRecordDecl *rd) override;
+
   void setThunkLinkage(cir::FuncOp thunk, bool forVTable, GlobalDecl gd,
                        bool returnAdjustment) override {
     GVALinkage linkage = cgm.getASTContext().GetGVALinkageForFunction(
@@ -874,8 +876,8 @@ Address CIRGenMicrosoftCXXABI::adjustThisArgumentForVirtualFunctionCall(
     mlir::Value adjConst = builder.getSInt32(adjustment.getQuantity(), loc);
     mlir::Value adjusted =
         cir::PtrStrideOp::create(builder, loc, u8PtrTy, u8This, adjConst);
-    return Address(builder.createBitcast(adjusted, thisAddr.getElementType()),
-                   thisAddr.getElementType(), thisAddr.getAlignment());
+    return Address(adjusted, builder.getUInt8Ty(), thisAddr.getAlignment())
+        .withElementType(builder, thisAddr.getElementType());
   }
 
   const auto *md = cast<CXXMethodDecl>(gd.getDecl());
@@ -925,11 +927,8 @@ Address CIRGenMicrosoftCXXABI::adjustThisArgumentForVirtualFunctionCall(
                      result.getAlignment().alignmentAtOffset(staticOffset));
   }
 
-  if (result.getElementType() != thisAddr.getElementType()) {
-    mlir::Value castPtr =
-        builder.createBitcast(result.getPointer(), thisAddr.getElementType());
-    result = Address(castPtr, thisAddr.getElementType(), result.getAlignment());
-  }
+  if (result.getElementType() != thisAddr.getElementType())
+    result = result.withElementType(builder, thisAddr.getElementType());
 
   return result;
 }
@@ -1227,6 +1226,26 @@ void CIRGenMicrosoftCXXABI::emitVBPtrStores(CIRGenFunction &cgf,
     Address vbPtrAddr(vbPtrSlot, s32PtrTy, cgf.getPointerAlign());
     builder.createStore(loc, gvDecayed, vbPtrAddr);
   }
+}
+
+std::vector<CharUnits>
+CIRGenMicrosoftCXXABI::getVBPtrOffsets(const CXXRecordDecl *rd) {
+  std::vector<CharUnits> vbPtrOffsets;
+  const ASTContext &context = cgm.getASTContext();
+  const ASTRecordLayout &layout = context.getASTRecordLayout(rd);
+
+  const VBTableGlobals &vbGlobals = enumerateVBTables(rd);
+  for (const std::unique_ptr<VPtrInfo> &vbt : *vbGlobals.VBTables) {
+    const ASTRecordLayout &subobjectLayout =
+        context.getASTRecordLayout(vbt->IntroducingObject);
+    CharUnits offs = vbt->NonVirtualOffset;
+    offs += subobjectLayout.getVBPtrOffset();
+    if (vbt->getVBaseWithVPtr())
+      offs += layout.getVBaseClassOffset(vbt->getVBaseWithVPtr());
+    vbPtrOffsets.push_back(offs);
+  }
+  llvm::sort(vbPtrOffsets);
+  return vbPtrOffsets;
 }
 
 void CIRGenMicrosoftCXXABI::initializeHiddenVirtualInheritanceMembers(

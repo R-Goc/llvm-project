@@ -21,6 +21,8 @@
 
 #include "clang/AST/Mangle.h"
 
+#include <vector>
+
 namespace clang::CIRGen {
 
 /// Implements C++ ABI-specific code generation functions.
@@ -54,6 +56,8 @@ public:
   getVirtualBaseClassOffset(mlir::Location loc, CIRGenFunction &cgf,
                             Address thisAddr, const CXXRecordDecl *classDecl,
                             const CXXRecordDecl *baseClassDecl) = 0;
+
+  virtual std::vector<CharUnits> getVBPtrOffsets(const CXXRecordDecl *rd);
 
   virtual mlir::Value emitDynamicCast(CIRGenFunction &cgf, mlir::Location loc,
                                       QualType srcRecordTy,
