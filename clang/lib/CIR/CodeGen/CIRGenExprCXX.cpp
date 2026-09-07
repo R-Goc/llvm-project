@@ -36,9 +36,10 @@ struct MemberCallInfo {
 } // namespace
 
 static MemberCallInfo commonBuildCXXMemberOrOperatorCall(
-    CIRGenFunction &cgf, const CXXMethodDecl *md, mlir::Value thisPtr,
+    CIRGenFunction &cgf, GlobalDecl gd, mlir::Value thisPtr,
     mlir::Value implicitParam, QualType implicitParamTy, const CallExpr *ce,
     CallArgList &args, CallArgList *rtlArgs) {
+  const auto *md = cast<CXXMethodDecl>(gd.getDecl());
   assert(ce == nullptr || isa<CXXMemberCallExpr>(ce) ||
          isa<CXXOperatorCallExpr>(ce));
   assert(md->isInstance() &&
@@ -46,7 +47,7 @@ static MemberCallInfo commonBuildCXXMemberOrOperatorCall(
 
   // Push the this ptr.
   const CXXRecordDecl *rd =
-      cgf.cgm.getCXXABI().getThisArgumentTypeForMethod(md);
+      cgf.cgm.getCXXABI().getThisArgumentTypeForMethod(gd);
   args.add(RValue::get(thisPtr), cgf.getTypes().deriveThisType(rd, md));
 
   // If there is an implicit parameter (e.g. VTT), emit it.
@@ -78,6 +79,15 @@ static MemberCallInfo commonBuildCXXMemberOrOperatorCall(
 
   //  return {required, prefixSize};
   return {required, prefixSize};
+}
+
+static MemberCallInfo commonBuildCXXMemberOrOperatorCall(
+    CIRGenFunction &cgf, const CXXMethodDecl *md, mlir::Value thisPtr,
+    mlir::Value implicitParam, QualType implicitParamTy, const CallExpr *ce,
+    CallArgList &args, CallArgList *rtlArgs) {
+  return commonBuildCXXMemberOrOperatorCall(cgf, GlobalDecl(md), thisPtr,
+                                            implicitParam, implicitParamTy, ce,
+                                            args, rtlArgs);
 }
 
 RValue
@@ -1368,7 +1378,7 @@ RValue CIRGenFunction::emitCXXDestructorCall(
   assert(!cir::MissingFeatures::addressSpace());
 
   CallArgList args;
-  commonBuildCXXMemberOrOperatorCall(*this, dtorDecl, thisVal, implicitParam,
+  commonBuildCXXMemberOrOperatorCall(*this, dtor, thisVal, implicitParam,
                                      implicitParamTy, ce, args, nullptr);
   assert((ce || dtor.getDecl()) && "expected source location provider");
   return emitCall(cgm.getTypes().arrangeCXXStructorDeclaration(dtor), callee,
