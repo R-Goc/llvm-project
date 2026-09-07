@@ -352,10 +352,30 @@ static void emitNullBaseClassInitialization(CIRGenFunction &cgf,
   stores.emplace_back(CharUnits::Zero(), nvSize);
 
   // Each store is split by the existence of a vbptr.
-  if (cgf.cgm.getTarget().getCXXABI().isMicrosoft() && base->getNumVBases()) {
-    cgf.cgm.errorNYI(base->getSourceRange(),
-                     "emitNullBaseClassInitialization: MSVC vbptr splitting");
-    return;
+  if (cgf.cgm.getTarget().getCXXABI().isMicrosoft()) {
+    CharUnits vbPtrWidth =
+        cgf.getContext().getTypeSizeInChars(cgf.getContext().VoidPtrTy);
+    std::vector<CharUnits> vbPtrOffsets =
+        cgf.cgm.getCXXABI().getVBPtrOffsets(base);
+    for (CharUnits vbPtrOffset : vbPtrOffsets) {
+      // Stop before we hit any virtual base pointers located in virtual bases.
+      if (vbPtrOffset >= nvSize)
+        break;
+      std::pair<CharUnits, CharUnits> lastStore = stores.pop_back_val();
+      CharUnits lastStoreOffset = lastStore.first;
+
+      CharUnits splitBeforeOffset = lastStoreOffset;
+      CharUnits splitBeforeSize = vbPtrOffset - splitBeforeOffset;
+      assert(!splitBeforeSize.isNegative() && "negative store size!");
+      if (!splitBeforeSize.isZero())
+        stores.emplace_back(splitBeforeOffset, splitBeforeSize);
+
+      CharUnits splitAfterOffset = vbPtrOffset + vbPtrWidth;
+      CharUnits splitAfterSize = nvSize - splitAfterOffset;
+      assert(!splitAfterSize.isNegative() && "negative store size!");
+      if (!splitAfterSize.isZero())
+        stores.emplace_back(splitAfterOffset, splitAfterSize);
+    }
   }
 
   // If the type contains a pointer to data member we can't memset it to zero.
@@ -369,21 +389,43 @@ static void emitNullBaseClassInitialization(CIRGenFunction &cgf,
     cgf.cgm.errorNYI(
         base->getSourceRange(),
         "emitNullBaseClassInitialization: base constant is not null");
-  } else {
-    // Otherwise, just memset the whole thing to zero.  This is legal
-    // because in LLVM, all default initializers (other than the ones we just
-    // handled above) are guaranteed to have a bit pattern of all zeros.
-    // TODO(cir): When the MS CXXABI is supported, we will need to iterate over
-    // `stores` and create a separate memset for each one. For now, we know that
-    // there will only be one store and it will begin at offset zero, so that
-    // simplifies this code considerably.
-    assert(stores.size() == 1 && "Expected only one store");
-    assert(stores[0].first == CharUnits::Zero() &&
-           "Expected store to begin at offset zero");
+    return;
+  }
+
+  // If there is only one store covering the entire non-virtual base from offset 0,
+  // store the null constant directly.
+  if (stores.size() == 1 && stores[0].first == CharUnits::Zero() &&
+      stores[0].second == nvSize) {
     CIRGenBuilderTy &builder = cgf.getBuilder();
     mlir::Location loc = cgf.getLoc(base->getBeginLoc());
     builder.createStore(loc, builder.getConstant(loc, nullConstantForBase),
                         destPtr);
+    return;
+  }
+
+  // Otherwise, zero-initialize each memory range using memset.
+  CIRGenBuilderTy &builder = cgf.getBuilder();
+  mlir::Location loc = cgf.getLoc(base->getBeginLoc());
+  Address byteDest = destPtr.withElementType(builder, builder.getUInt8Ty());
+  for (const auto &store : stores) {
+    CharUnits storeOffset = store.first;
+    CharUnits storeSize = store.second;
+    Address storeAddr = byteDest;
+    if (!storeOffset.isZero()) {
+      mlir::Value offsetVal =
+          builder.getSInt32(storeOffset.getQuantity(), loc);
+      mlir::Value stridedPtr =
+          builder.createPtrStride(loc, byteDest.getPointer(), offsetVal);
+      storeAddr =
+          Address(stridedPtr, builder.getUInt8Ty(),
+                  destPtr.getAlignment().alignmentAtOffset(storeOffset));
+    }
+    Address voidPtr = storeAddr.withElementType(builder, cgf.cgm.voidTy);
+    mlir::Value storeSizeVal =
+        builder.getConstInt(loc, cgf.sizeTy, storeSize.getQuantity());
+    builder.createMemSet(loc, voidPtr,
+                         builder.getConstInt(loc, cgf.cgm.uInt8Ty, 0),
+                         storeSizeVal);
   }
 }
 
