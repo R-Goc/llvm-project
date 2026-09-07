@@ -142,8 +142,13 @@ public:
   /// parameter to point to some artificial offset in a complete object due to
   /// vbases being reordered.
   virtual const clang::CXXRecordDecl *
+  getThisArgumentTypeForMethod(clang::GlobalDecl gd) {
+    return cast<clang::CXXMethodDecl>(gd.getDecl())->getParent();
+  }
+
+  const clang::CXXRecordDecl *
   getThisArgumentTypeForMethod(const clang::CXXMethodDecl *md) {
-    return md->getParent();
+    return getThisArgumentTypeForMethod(clang::GlobalDecl(md));
   }
 
   /// Return whether the given global decl needs a VTT (virtual table table)

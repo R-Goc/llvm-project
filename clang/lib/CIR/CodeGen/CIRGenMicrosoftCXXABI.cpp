@@ -159,9 +159,9 @@ public:
     case Dtor_Complete:
       if (dtor->hasAttr<DLLExportAttr>())
         return cir::GlobalLinkageKind::WeakODRLinkage;
-      return linkage == GVA_DiscardableODR
-                 ? cir::GlobalLinkageKind::LinkOnceODRLinkage
-                 : cir::GlobalLinkageKind::WeakODRLinkage;
+      if (dtor->hasAttr<DLLImportAttr>())
+        return cir::GlobalLinkageKind::AvailableExternallyLinkage;
+      return cir::GlobalLinkageKind::LinkOnceODRLinkage;
     case Dtor_Deleting:
     case Dtor_VectorDeleting:
       return cir::GlobalLinkageKind::LinkOnceODRLinkage;
@@ -261,7 +261,7 @@ public:
   }
 
   const CXXRecordDecl *
-  getThisArgumentTypeForMethod(const CXXMethodDecl *md) override;
+  getThisArgumentTypeForMethod(GlobalDecl gd) override;
 
   Address adjustThisArgumentForVirtualFunctionCall(CIRGenFunction &cgf,
                                                    GlobalDecl gd,
@@ -502,12 +502,12 @@ void CIRGenMicrosoftCXXABI::emitInstanceFunctionProlog(SourceLocation loc,
     return;
 
   mlir::Value thisVal = loadIncomingCXXThis(cgf);
+  CIRGenBuilderTy &builder = cgf.getBuilder();
   const auto *md = cast<CXXMethodDecl>(cgf.curGD.getDecl());
   if (!cgf.curFuncIsThunk && md->isVirtual()) {
     CharUnits adjustment = getVirtualFunctionPrologueThisAdjustment(cgf.curGD);
     if (!adjustment.isZero()) {
       assert(adjustment.isPositive());
-      CIRGenBuilderTy &builder = cgf.getBuilder();
       mlir::Location mlirLoc = cgf.getLoc(loc);
       cir::PointerType u8PtrTy = builder.getUInt8PtrTy();
       mlir::Value u8This = builder.createBitcast(thisVal, u8PtrTy);
@@ -515,9 +515,13 @@ void CIRGenMicrosoftCXXABI::emitInstanceFunctionProlog(SourceLocation loc,
           builder.getSInt32(-adjustment.getQuantity(), mlirLoc);
       mlir::Value adjusted =
           cir::PtrStrideOp::create(builder, mlirLoc, u8PtrTy, u8This, negAdj);
-      thisVal = builder.createBitcast(adjusted, thisVal.getType());
+      thisVal = adjusted;
     }
   }
+  cir::PointerType classPtrTy =
+      builder.getPointerTo(cgf.convertType(md->getParent()));
+  if (thisVal.getType() != classPtrTy)
+    thisVal = builder.createBitcast(thisVal, classPtrTy);
   setCXXABIThisValue(cgf, thisVal);
 
   if (hasThisReturn(cgf.curGD) || hasMostDerivedReturn(cgf.curGD)) {
@@ -611,7 +615,10 @@ void CIRGenMicrosoftCXXABI::emitCXXStructor(GlobalDecl gd) {
   }
 
   auto fn = cgm.codegenCXXStructor(gd);
-  cgm.maybeSetTrivialComdat(*dtor, fn);
+  if (cgm.supportsCOMDAT() && cir::isWeakForLinker(fn.getLinkage()))
+    fn.setComdat(true);
+  else
+    cgm.maybeSetTrivialComdat(*dtor, fn);
 }
 
 void CIRGenMicrosoftCXXABI::emitDestructorCall(
@@ -830,17 +837,19 @@ void CIRGenMicrosoftCXXABI::emitConditionalArrayDtorCall(
 }
 
 const CXXRecordDecl *
-CIRGenMicrosoftCXXABI::getThisArgumentTypeForMethod(const CXXMethodDecl *md) {
+CIRGenMicrosoftCXXABI::getThisArgumentTypeForMethod(GlobalDecl gd) {
+  auto *md = cast<CXXMethodDecl>(gd.getDecl());
   if (md->isVirtual()) {
-    GlobalDecl lookupGD;
+    GlobalDecl lookupGD = gd;
     if (const auto *dd = dyn_cast<CXXDestructorDecl>(md)) {
+      if (gd.getDtorType() == Dtor_Complete)
+        return md->getParent();
+
       lookupGD = GlobalDecl(
           dd, cgm.getASTContext().getTargetInfo().emitVectorDeletingDtors(
                   cgm.getASTContext().getLangOpts())
                   ? Dtor_VectorDeleting
                   : Dtor_Deleting);
-    } else {
-      lookupGD = GlobalDecl(md);
     }
     MethodVFTableLocation ml =
         cgm.getMicrosoftVTableContext().getMethodVFTableLocation(lookupGD);
@@ -1348,7 +1357,7 @@ mlir::Value CIRGenMicrosoftCXXABI::performThisAdjustment(
     v = cir::PtrStrideOp::create(builder, loc, u8PtrTy, v, nonVirt);
   }
 
-  return builder.createBitcast(v, thisAddr.getElementType());
+  return builder.createBitcast(v, thisAddr.getPointer().getType());
 }
 
 mlir::Value CIRGenMicrosoftCXXABI::performReturnAdjustment(
@@ -1377,7 +1386,7 @@ mlir::Value CIRGenMicrosoftCXXABI::performReturnAdjustment(
     v = cir::PtrStrideOp::create(builder, loc, u8PtrTy, v, nonVirt);
   }
 
-  return builder.createBitcast(v, ret.getElementType());
+  return builder.createBitcast(v, ret.getPointer().getType());
 }
 
 bool CIRGenMicrosoftCXXABI::shouldTypeidBeNullChecked(QualType srcTy) {
