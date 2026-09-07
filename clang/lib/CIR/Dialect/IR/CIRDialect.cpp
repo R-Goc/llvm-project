@@ -3192,18 +3192,27 @@ OpFoldResult cir::NotOp::fold(FoldAdaptor adaptor) {
 static LogicalResult verifyMemberPtrCast(Operation *op, mlir::Value src,
                                          mlir::Type resultTy) {
   // Let the operand type be T1 C1::*, let the result type be T2 C2::*.
-  // Verify that T1 and T2 are the same type.
-  mlir::Type inputMemberTy;
-  mlir::Type resultMemberTy;
+  // Verify that T1 and T2 are the same type (ignoring the implicit `this`
+  // parameter for member functions, which points to C1 and C2 respectively).
   if (mlir::isa<cir::DataMemberType>(src.getType())) {
-    inputMemberTy =
+    auto inputMemberTy =
         mlir::cast<cir::DataMemberType>(src.getType()).getMemberTy();
-    resultMemberTy = mlir::cast<cir::DataMemberType>(resultTy).getMemberTy();
+    auto resultMemberTy =
+        mlir::cast<cir::DataMemberType>(resultTy).getMemberTy();
+    if (inputMemberTy != resultMemberTy)
+      return op->emitOpError()
+             << "member types of the operand and the result do not match";
+  } else if (mlir::isa<cir::MethodType>(src.getType())) {
+    auto inFnTy =
+        mlir::cast<cir::MethodType>(src.getType()).getMemberFuncTy();
+    auto resFnTy =
+        mlir::cast<cir::MethodType>(resultTy).getMemberFuncTy();
+    if (inFnTy.getReturnType() != resFnTy.getReturnType() ||
+        inFnTy.isVarArg() != resFnTy.isVarArg() ||
+        inFnTy.getInputs().drop_front() != resFnTy.getInputs().drop_front())
+      return op->emitOpError()
+             << "member types of the operand and the result do not match";
   }
-  assert(!cir::MissingFeatures::memberFuncPtrCast());
-  if (inputMemberTy != resultMemberTy)
-    return op->emitOpError()
-           << "member types of the operand and the result do not match";
 
   return mlir::success();
 }

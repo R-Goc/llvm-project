@@ -623,15 +623,37 @@ mlir::Type CIRGenTypes::convertType(QualType type) {
     NestedNameSpecifier mptNNS = mpt->getQualifier();
     auto clsTy = mlir::cast<cir::RecordType>(
         convertType(QualType(mptNNS.getAsType(), 0)));
+
+    cir::MSInheritanceModelAttr inheritanceAttr;
+    if (cgm.getTarget().getCXXABI().isMicrosoft()) {
+      const CXXRecordDecl *rd = mpt->getMostRecentCXXRecordDecl();
+      cir::MSInheritanceModel model;
+      switch (rd->getMSInheritanceModel()) {
+      case clang::MSInheritanceModel::Single:
+        model = cir::MSInheritanceModel::Single;
+        break;
+      case clang::MSInheritanceModel::Multiple:
+        model = cir::MSInheritanceModel::Multiple;
+        break;
+      case clang::MSInheritanceModel::Virtual:
+        model = cir::MSInheritanceModel::Virtual;
+        break;
+      case clang::MSInheritanceModel::Unspecified:
+        model = cir::MSInheritanceModel::Unspecified;
+        break;
+      }
+      inheritanceAttr = cir::MSInheritanceModelAttr::get(&getMLIRContext(), model);
+    }
+
     if (mpt->isMemberDataPointer()) {
       mlir::Type memberTy = convertType(mpt->getPointeeType());
-      resultType = cir::DataMemberType::get(memberTy, clsTy);
+      resultType = cir::DataMemberType::get(memberTy, clsTy, inheritanceAttr);
     } else {
       auto memberFuncTy = getFunctionType(cgm.getTypes().arrangeCXXMethodType(
           mptNNS.getAsRecordDecl(),
           mpt->getPointeeType()->getAs<clang::FunctionProtoType>(),
           /*methodDecl=*/nullptr));
-      resultType = cir::MethodType::get(memberFuncTy, clsTy);
+      resultType = cir::MethodType::get(memberFuncTy, clsTy, inheritanceAttr);
     }
     break;
   }

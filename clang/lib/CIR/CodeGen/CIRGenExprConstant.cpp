@@ -1459,7 +1459,8 @@ mlir::Attribute ConstantEmitter::tryEmitPrivate(const APValue &value,
 
     const ValueDecl *memberDecl = value.getMemberPointerDecl();
     if (!memberDecl)
-      return builder.getZeroInitAttr(cgm.convertType(destType));
+      return cgm.emitNullMemberAttr(destType,
+                                    destType->castAs<MemberPointerType>());
 
     if (auto const *cxxDecl = dyn_cast<CXXMethodDecl>(memberDecl)) {
       auto ty = mlir::cast<cir::MethodType>(cgm.convertType(destType));

@@ -1330,12 +1330,65 @@ CIRGenMicrosoftCXXABI::buildVirtualMethodAttr(cir::MethodType methodTy,
 
   MethodVFTableLocation ml =
       cgm.getMicrosoftVTableContext().getMethodVFTableLocation(md);
-  const ASTContext &astContext = cgm.getASTContext();
-  CharUnits pointerWidth = astContext.toCharUnitsFromBits(
-      astContext.getTargetInfo().getPointerWidth(LangAS::Default));
-  uint64_t vtableOffset = ml.Index * pointerWidth.getQuantity();
 
-  return cir::MethodAttr::get(methodTy, vtableOffset);
+  // Mangle the virtual member pointer thunk name (e.g. ??_9Method@@$BA@AE)
+  SmallString<256> thunkName;
+  llvm::raw_svector_ostream out(thunkName);
+  getMangleContext().mangleVirtualMemPtrThunk(md, ml, out);
+
+  auto thunkFuncOp = cgm.getModule().lookupSymbol<cir::FuncOp>(thunkName);
+  if (!thunkFuncOp) {
+    mlir::Location loc = cgm.getLoc(md->getLocation());
+    cir::FuncType thunkTy = methodTy.getMemberFuncTy();
+    mlir::OpBuilder::InsertionGuard guard(cgm.getBuilder());
+    cgm.getBuilder().setInsertionPointToEnd(cgm.getModule().getBody());
+    thunkFuncOp =
+        cir::FuncOp::create(cgm.getBuilder(), loc, thunkName, thunkTy);
+    thunkFuncOp.setLinkage(cir::GlobalLinkageKind::LinkOnceODRLinkage);
+    thunkFuncOp.setVisibility(mlir::SymbolTable::Visibility::Public);
+
+    mlir::Block *entryBlock = thunkFuncOp.addEntryBlock();
+    cgm.getBuilder().setInsertionPointToStart(entryBlock);
+    mlir::Value thisVal = entryBlock->getArgument(0);
+
+    auto voidPtrTy = cgm.getBuilder().getVoidPtrTy();
+    auto voidPtrPtrTy = cgm.getBuilder().getPointerTo(voidPtrTy);
+    mlir::Value thisVoidPtrPtr =
+        cgm.getBuilder().createBitcast(loc, thisVal, voidPtrPtrTy);
+    mlir::Value vtablePtr =
+        cgm.getBuilder().createAlignedLoad(loc, voidPtrTy, thisVoidPtrPtr);
+
+    mlir::Value slotOffset = cgm.getBuilder().getConstantInt(
+        loc, cgm.getBuilder().getUInt64Ty(), ml.Index);
+    mlir::Value vfnSlotPtr = cir::PtrStrideOp::create(
+        cgm.getBuilder(), loc, voidPtrTy, vtablePtr, slotOffset);
+    mlir::Value vfnSlotPtrPtr =
+        cgm.getBuilder().createBitcast(loc, vfnSlotPtr, voidPtrPtrTy);
+    mlir::Value calleeFnPtr =
+        cgm.getBuilder().createAlignedLoad(loc, voidPtrTy, vfnSlotPtrPtr);
+
+    auto fnPtrTy = cgm.getBuilder().getPointerTo(thunkTy);
+    mlir::Value calleeTyped =
+        cgm.getBuilder().createBitcast(loc, calleeFnPtr, fnPtrTy);
+
+    llvm::SmallVector<mlir::Value> operands;
+    operands.push_back(calleeTyped);
+    operands.append(entryBlock->getArguments().begin(),
+                    entryBlock->getArguments().end());
+
+    if (mlir::isa<cir::VoidType>(thunkTy.getReturnType())) {
+      cir::CallOp::create(cgm.getBuilder(), loc, mlir::SymbolRefAttr{},
+                          thunkTy.getReturnType(), operands);
+      cir::ReturnOp::create(cgm.getBuilder(), loc);
+    } else {
+      auto callOp =
+          cir::CallOp::create(cgm.getBuilder(), loc, mlir::SymbolRefAttr{},
+                              thunkTy.getReturnType(), operands);
+      cir::ReturnOp::create(cgm.getBuilder(), loc, callOp.getResult());
+    }
+  }
+
+  return cgm.getBuilder().getMethodAttr(methodTy, thunkFuncOp);
 }
 
 mlir::Value CIRGenMicrosoftCXXABI::performThisAdjustment(

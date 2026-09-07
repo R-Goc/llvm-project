@@ -356,18 +356,28 @@ def CIR_DataMemberType : CIR_Type<"DataMember", "data_member", [
   }];
 
   let parameters = (ins "mlir::Type":$member_ty,
-                        "cir::RecordType":$class_ty);
+                        "cir::RecordType":$class_ty,
+                        OptionalParameter<"cir::MSInheritanceModelAttr">:$inheritance);
 
   let builders = [
     TypeBuilderWithInferredContext<(ins
-      "mlir::Type":$member_ty, "cir::RecordType":$class_ty
+      "mlir::Type":$member_ty, "cir::RecordType":$class_ty,
+      CArg<"cir::MSInheritanceModelAttr", "{}">:$inheritance
     ), [{
-      return $_get(member_ty.getContext(), member_ty, class_ty);
+      return $_get(member_ty.getContext(), member_ty, class_ty, inheritance);
     }]>,
   ];
 
   let assemblyFormat = [{
-    `<` $member_ty `in` $class_ty `>`
+    `<` $member_ty `in` $class_ty ( `,` ` ` custom<MSInheritance>($inheritance)^ )? `>`
+  }];
+
+  let extraClassDeclaration = [{
+    std::optional<cir::MSInheritanceModel> getMSInheritance() const {
+      if (auto attr = getInheritance())
+        return attr.getValue();
+      return std::nullopt;
+    }
   }];
 }
 
@@ -617,18 +627,28 @@ def CIR_MethodType : CIR_Type<"Method", "method", [
   }];
 
   let parameters = (ins "cir::FuncType":$member_func_ty,
-                        "cir::RecordType":$class_ty);
+                        "cir::RecordType":$class_ty,
+                        OptionalParameter<"cir::MSInheritanceModelAttr">:$inheritance);
 
   let builders = [
     TypeBuilderWithInferredContext<(ins
-      "cir::FuncType":$member_func_ty, "cir::RecordType":$class_ty
+      "cir::FuncType":$member_func_ty, "cir::RecordType":$class_ty,
+      CArg<"cir::MSInheritanceModelAttr", "{}">:$inheritance
     ), [{
-      return $_get(member_func_ty.getContext(), member_func_ty, class_ty);
+      return $_get(member_func_ty.getContext(), member_func_ty, class_ty, inheritance);
     }]>,
   ];
 
   let assemblyFormat = [{
-    `<` qualified($member_func_ty) `in` $class_ty `>`
+    `<` qualified($member_func_ty) `in` $class_ty ( `,` ` ` custom<MSInheritance>($inheritance)^ )? `>`
+  }];
+
+  let extraClassDeclaration = [{
+    std::optional<cir::MSInheritanceModel> getMSInheritance() const {
+      if (auto attr = getInheritance())
+        return attr.getValue();
+      return std::nullopt;
+    }
   }];
 }
 

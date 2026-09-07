@@ -551,6 +551,19 @@ def CIR_ConstPtrAttr : CIR_ValueLikeAttr<"ConstPtr", "ptr"> {
 }
 
 //===----------------------------------------------------------------------===//
+// MSInheritanceModelAttr
+//===----------------------------------------------------------------------===//
+
+def CIR_MSInheritanceModelAttr : CIR_EnumAttr<CIR_MSInheritanceModel,
+                                              "ms_inheritance"> {
+  let summary = "Attribute representing the MSVC inheritance model for member pointers";
+  let description = [{
+    Encodes the MSVC inheritance model for member pointers: `single`, `multiple`,
+    `virtual`, or `unspecified`.
+  }];
+}
+
+//===----------------------------------------------------------------------===//
 // DataMemberAttr
 //===----------------------------------------------------------------------===//
 

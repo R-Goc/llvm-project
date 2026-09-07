@@ -48,4 +48,8 @@ class VectorType;
 #define GET_ATTRDEF_CLASSES
 #include "clang/CIR/Dialect/IR/CIROpsAttributes.h.inc"
 
+namespace cir {
+using MSInheritanceAttr = MSInheritanceModelAttr;
+} // namespace cir
+
 #endif // CLANG_CIR_DIALECT_IR_CIRATTRS_H
