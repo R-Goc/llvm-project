@@ -1453,12 +1453,14 @@ void CIRGenFunction::emitCXXConstructorCall(const clang::CXXConstructorDecl *d,
 
   const FunctionProtoType *fpt = d->getType()->castAs<FunctionProtoType>();
 
-  assert(!cir::MissingFeatures::opCallArgEvaluationOrder());
+  EvaluationOrder order = e->isListInitialization()
+                              ? EvaluationOrder::ForceLeftToRight
+                              : EvaluationOrder::Default;
 
   if (auto inherited = d->getInheritedConstructor();
       !inherited || cgm.getTypes().inheritingCtorHasParams(inherited, type))
     emitCallArgs(args, fpt, e->arguments(), e->getConstructor(),
-                 /*ParamsToSkip=*/0);
+                 /*ParamsToSkip=*/0, order);
 
   assert(!cir::MissingFeatures::sanitizers());
   emitCXXConstructorCall(d, type, forVirtualBase, delegating, thisAddr, args,
@@ -1473,15 +1475,15 @@ static bool canEmitDelegateCallArgs(CIRGenModule &cgm, ASTContext &ctx,
     return false;
 
   if (ctx.getTargetInfo().getCXXABI().areArgsDestroyedLeftToRightInCallee()) {
-    // FIXME(CIR): It isn't clear to me that this is the right answer here,
-    // classic-codegen decides the answer is 'false' if there is an inalloca
-    // argument or if there is a param that needs destruction.
-    // When we get an understanding of what the the calling-convention code
-    // needs here, we should be able to replace this with either a 'return
-    // false' or 'return true'.
-    // Perhaps we should be checking isParamDestroyedInCallee?
-    cgm.errorNYI(d->getSourceRange(),
-                 "canEmitDelegateCallArgs: args-destroyed-L-to-R in callee");
+    if (ctx.getTargetInfo().getTriple().getArch() == llvm::Triple::x86) {
+      cgm.errorNYI(d->getSourceRange(),
+                   "canEmitDelegateCallArgs: 32-bit x86 MSVC ABI");
+      return false;
+    }
+    // If the parameters are callee-cleanup, it's not safe to forward.
+    for (auto *p : d->parameters())
+      if (p->needsDestruction(ctx))
+        return false;
   }
 
   return true;

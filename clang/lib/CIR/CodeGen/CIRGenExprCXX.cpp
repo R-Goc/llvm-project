@@ -69,8 +69,24 @@ static MemberCallInfo commonBuildCXXMemberOrOperatorCall(
   } else if (ce) {
     // Special case: skip first argument of CXXOperatorCall (it is "this").
     unsigned argsToSkip = isa<CXXOperatorCallExpr>(ce) ? 1 : 0;
+    CIRGenFunction::EvaluationOrder order =
+        CIRGenFunction::EvaluationOrder::Default;
+    if (const auto *oce = dyn_cast<CXXOperatorCallExpr>(ce)) {
+      switch (oce->getOperator()) {
+      case OO_LessLess:
+      case OO_GreaterGreater:
+      case OO_AmpAmp:
+      case OO_PipePipe:
+      case OO_Comma:
+      case OO_ArrowStar:
+        order = CIRGenFunction::EvaluationOrder::ForceLeftToRight;
+        break;
+      default:
+        break;
+      }
+    }
     cgf.emitCallArgs(args, fpt, drop_begin(ce->arguments(), argsToSkip),
-                     ce->getDirectCallee());
+                     ce->getDirectCallee(), /*paramsToSkip=*/0, order);
   } else {
     assert(
         fpt->getNumParams() == 0 &&
@@ -196,7 +212,8 @@ RValue CIRGenFunction::emitCXXMemberOrOperatorMemberCallExpr(
       rtlArgs = &rtlArgStorage;
       emitCallArgs(*rtlArgs, md->getType()->castAs<FunctionProtoType>(),
                    drop_begin(ce->arguments(), 1), ce->getDirectCallee(),
-                   /*ParamsToSkip*/ 0);
+                   /*ParamsToSkip*/ 0,
+                   CIRGenFunction::EvaluationOrder::ForceRightToLeft);
     }
   }
 

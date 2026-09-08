@@ -1211,8 +1211,18 @@ RValue CIRGenFunction::emitCall(const CIRGenFunctionInfo &funcInfo,
       v = arg.getKnownRValue().getValue();
 
       // We might have to widen integers, but we should never truncate.
-      if (argType != v.getType() && mlir::isa<cir::IntType>(v.getType()))
-        cgm.errorNYI(loc, "emitCall: widening integer call argument");
+      if (argType != v.getType() && mlir::isa<cir::IntType>(v.getType())) {
+        if (auto dstIntTy = mlir::dyn_cast<cir::IntType>(argType)) {
+          auto srcIntTy = mlir::cast<cir::IntType>(v.getType());
+          if (dstIntTy.getWidth() > srcIntTy.getWidth()) {
+            v = builder.createIntCast(v, dstIntTy);
+          } else {
+            cgm.errorNYI(loc, "emitCall: widening integer call argument");
+          }
+        } else {
+          cgm.errorNYI(loc, "emitCall: widening integer call argument");
+        }
+      }
 
       // If we have a pointer argument, match the expected function signature.
       if (argType != v.getType()) {
@@ -1543,8 +1553,14 @@ QualType CIRGenFunction::getVarArgType(const Expr *arg) {
   if (!getTarget().getTriple().isOSWindows())
     return arg->getType();
 
-  assert(!cir::MissingFeatures::msabi());
-  cgm.errorNYI(arg->getSourceRange(), "getVarArgType: NYI for Windows target");
+  if (arg->getType()->isIntegerType() &&
+      getContext().getTypeSize(arg->getType()) <
+          getContext().getTargetInfo().getPointerWidth(LangAS::Default) &&
+      arg->isNullPointerConstant(getContext(),
+                                 Expr::NPC_ValueDependentIsNotNull)) {
+    return getContext().getIntPtrType();
+  }
+
   return arg->getType();
 }
 
@@ -1563,7 +1579,8 @@ RValue CIRGenFunction::emitAnyExprToTemp(const Expr *e) {
 void CIRGenFunction::emitCallArgs(
     CallArgList &args, PrototypeWrapper prototype,
     llvm::iterator_range<clang::CallExpr::const_arg_iterator> argRange,
-    AbstractCallee callee, unsigned paramsToSkip) {
+    AbstractCallee callee, unsigned paramsToSkip,
+    EvaluationOrder order) {
   llvm::SmallVector<QualType, 16> argTypes;
 
   assert(!cir::MissingFeatures::opCallCallConv());
@@ -1587,11 +1604,13 @@ void CIRGenFunction::emitCallArgs(
 
   // We must evaluate arguments from right to left in the MS C++ ABI, because
   // arguments are destroyed left to right in the callee. As a special case,
-  // there are certain language constructs taht require left-to-right
+  // there are certain language constructs that require left-to-right
   // evaluation, and in those cases we consider the evaluation order requirement
   // to trump the "destruction order is reverse construction order" guarantee.
-  auto leftToRight = true;
-  assert(!cir::MissingFeatures::msabi());
+  bool leftToRight =
+      cgm.getTarget().getCXXABI().areArgsDestroyedLeftToRightInCallee()
+          ? order == EvaluationOrder::ForceLeftToRight
+          : order != EvaluationOrder::ForceRightToLeft;
 
   auto maybeEmitImplicitObjectSize = [&](size_t i, const Expr *arg,
                                          RValue emittedArg) {
@@ -1636,10 +1655,10 @@ void CIRGenFunction::emitCallArgs(
       assert(!cir::MissingFeatures::sanitizers());
       maybeEmitImplicitObjectSize(idx, *currentArg, rvArg);
     }
-
-    if (!leftToRight)
-      std::reverse(args.begin() + callArgsStart, args.end());
   }
+
+  if (!leftToRight)
+    std::reverse(args.begin() + callArgsStart, args.end());
 }
 
 // FIXME(cir): This is identical to the version from classic-codegen, we should

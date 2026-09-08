@@ -1860,12 +1860,22 @@ public:
   void emitCallAndReturnForThunk(cir::FuncOp callee, const ThunkInfo *thunk,
                                  bool isUnprototyped);
 
+  enum class EvaluationOrder {
+    /// No language constraints on evaluation order.
+    Default,
+    /// Language semantics require left-to-right evaluation.
+    ForceLeftToRight,
+    /// Language semantics require right-to-left evaluation.
+    ForceRightToLeft
+  };
+
   void emitCallArg(CallArgList &args, const clang::Expr *e,
                    clang::QualType argType);
   void emitCallArgs(
       CallArgList &args, PrototypeWrapper prototype,
       llvm::iterator_range<clang::CallExpr::const_arg_iterator> argRange,
-      AbstractCallee callee = AbstractCallee(), unsigned paramsToSkip = 0);
+      AbstractCallee callee = AbstractCallee(), unsigned paramsToSkip = 0,
+      EvaluationOrder order = EvaluationOrder::Default);
   RValue emitCallExpr(const clang::CallExpr *e,
                       ReturnValueSlot returnValue = ReturnValueSlot());
   LValue emitCallExprLValue(const clang::CallExpr *e);
