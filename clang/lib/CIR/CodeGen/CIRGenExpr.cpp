@@ -2349,7 +2349,26 @@ RValue CIRGenFunction::emitCall(clang::QualType calleeTy,
   assert(!cir::MissingFeatures::sanitizers());
 
   CallArgList args;
-  assert(!cir::MissingFeatures::opCallArgEvaluationOrder());
+
+  EvaluationOrder order = EvaluationOrder::Default;
+  if (const auto *oce = dyn_cast<CXXOperatorCallExpr>(e)) {
+    if (oce->isAssignmentOp())
+      order = EvaluationOrder::ForceRightToLeft;
+    else {
+      switch (oce->getOperator()) {
+      case OO_LessLess:
+      case OO_GreaterGreater:
+      case OO_AmpAmp:
+      case OO_PipePipe:
+      case OO_Comma:
+      case OO_ArrowStar:
+        order = EvaluationOrder::ForceLeftToRight;
+        break;
+      default:
+        break;
+      }
+    }
+  }
 
   // C++23 static-member operators (`static operator()` /
   // `static operator[]`) produce a CXXOperatorCallExpr whose first argument
@@ -2367,7 +2386,7 @@ RValue CIRGenFunction::emitCall(clang::QualType calleeTy,
   }
 
   emitCallArgs(args, dyn_cast<FunctionProtoType>(fnType), arguments,
-               e->getDirectCallee());
+               e->getDirectCallee(), /*paramsToSkip=*/0, order);
 
   const CIRGenFunctionInfo &funcInfo =
       cgm.getTypes().arrangeFreeFunctionCall(args, fnType);
