@@ -35,6 +35,8 @@ void (S::*s_fn)() = &S::f;
 void (Poly::*poly_vfn)() = &Poly::g;
 void (M::*m_fn)() = &M::h;
 void (M::*m_null)() = nullptr;
+void (V::*v_fn_null)() = nullptr;
+void (U::*u_fn_null)() = nullptr;
 
 // CIR-BEFORE-DAG: cir.global external dso_local @"?s_data@@3PEQS@@HEQ1@" = #cir.data_member<[0]> : !cir.data_member<!s32i in !rec_S, single>
 // CIR-BEFORE-DAG: cir.global external dso_local @"?s_null@@3PEQS@@HEQ1@" = #cir.data_member<null> : !cir.data_member<!s32i in !rec_S, single>
@@ -45,6 +47,8 @@ void (M::*m_null)() = nullptr;
 // CIR-BEFORE-DAG: cir.global external dso_local @"?poly_vfn@@3P8Poly@@EAAXXZEQ1@" = #cir.method<@"??_9Poly@@$BA@AA"> : !cir.method<!cir.func<(!cir.ptr<!rec_Poly>)> in !rec_Poly, single>
 // CIR-BEFORE-DAG: cir.global external dso_local @"?m_fn@@3P8M@@EAAXXZEQ1@" = #cir.method<@"?h@M@@QEAAXXZ"> : !cir.method<!cir.func<(!cir.ptr<!rec_M>)> in !rec_M, multiple>
 // CIR-BEFORE-DAG: cir.global external dso_local @"?m_null@@3P8M@@EAAXXZEQ1@" = #cir.method<null> : !cir.method<!cir.func<(!cir.ptr<!rec_M>)> in !rec_M, multiple>
+// CIR-BEFORE-DAG: cir.global external dso_local @"?v_fn_null@@3P8V@@EAAXXZEQ1@" = #cir.method<null> : !cir.method<!cir.func<(!cir.ptr<!rec_V>)> in !rec_V, virtual>
+// CIR-BEFORE-DAG: cir.global external dso_local @"?u_fn_null@@3P8U@@EAAXXZEQ1@" = #cir.method<null> : !cir.method<!cir.func<(!cir.ptr<!rec_U>)> in !rec_U, unspecified>
 
 // CIR-AFTER-DAG: cir.global external dso_local @"?s_data@@3PEQS@@HEQ1@" = #cir.int<0> : !s32i
 // CIR-AFTER-DAG: cir.global external dso_local @"?s_null@@3PEQS@@HEQ1@" = #cir.int<-1> : !s32i
@@ -55,6 +59,8 @@ void (M::*m_null)() = nullptr;
 // CIR-AFTER-DAG: cir.global external dso_local @"?poly_vfn@@3P8Poly@@EAAXXZEQ1@" = #cir.global_view<@"??_9Poly@@$BA@AA"> : !cir.ptr<!void>
 // CIR-AFTER-DAG: cir.global external dso_local @"?m_fn@@3P8M@@EAAXXZEQ1@" = #cir.const_record<{#cir.global_view<@"?h@M@@QEAAXXZ"> : !cir.ptr<!void>, #cir.int<0> : !s32i}>
 // CIR-AFTER-DAG: cir.global external dso_local @"?m_null@@3P8M@@EAAXXZEQ1@" = #cir.const_record<{#cir.ptr<null> : !cir.ptr<!void>, #cir.int<0> : !s32i}>
+// CIR-AFTER-DAG: cir.global external dso_local @"?v_fn_null@@3P8V@@EAAXXZEQ1@" = #cir.const_record<{#cir.ptr<null> : !cir.ptr<!void>, #cir.int<0> : !s32i, #cir.int<-1> : !s32i}>
+// CIR-AFTER-DAG: cir.global external dso_local @"?u_fn_null@@3P8U@@EAAXXZEQ1@" = #cir.const_record<{#cir.ptr<null> : !cir.ptr<!void>, #cir.int<0> : !s32i, #cir.int<0> : !s32i, #cir.int<-1> : !s32i}>
 
 // Test vcall thunk generation
 // CIR-BEFORE-LABEL: cir.func linkonce_odr @"??_9Poly@@$BA@AA"(%arg0: !cir.ptr<!rec_Poly>)
@@ -127,6 +133,21 @@ bool test_bool_data(int S::*p) {
 // CIR-AFTER:   %[[CMP:.*]] = cir.cmp ne %[[P_VAL]], %[[NULL_VAL]] : !s32i
 // CIR-AFTER:   cir.return %{{.*}} : !cir.bool
 
+// Test bool cast for polymorphic data member (null is 0)
+bool test_bool_poly_data(int Poly::*p) {
+  return (bool)p;
+}
+// CIR-BEFORE-LABEL: cir.func {{.*}}@"?test_bool_poly_data@@YA_NPEQPoly@@H@Z"
+// CIR-BEFORE:   %[[P:.*]] = cir.load {{.*}} : !cir.ptr<!cir.data_member<!s32i in !rec_Poly, single>>, !cir.data_member<!s32i in !rec_Poly, single>
+// CIR-BEFORE:   %[[BOOL:.*]] = cir.cast member_ptr_to_bool %[[P]] : !cir.data_member<!s32i in !rec_Poly, single> -> !cir.bool
+// CIR-BEFORE:   cir.return %{{.*}} : !cir.bool
+
+// CIR-AFTER-LABEL: cir.func {{.*}}@"?test_bool_poly_data@@YA_NPEQPoly@@H@Z"
+// CIR-AFTER:   %[[P_VAL:.*]] = cir.load {{.*}} : !cir.ptr<!s32i>, !s32i
+// CIR-AFTER:   %[[NULL_VAL:.*]] = cir.const #cir.int<0> : !s32i
+// CIR-AFTER:   %[[CMP:.*]] = cir.cmp ne %[[P_VAL]], %[[NULL_VAL]] : !s32i
+// CIR-AFTER:   cir.return %{{.*}} : !cir.bool
+
 // Test bool cast for method pointer
 bool test_bool_method(void (M::*fn)()) {
   return (bool)fn;
@@ -137,8 +158,10 @@ bool test_bool_method(void (M::*fn)()) {
 // CIR-BEFORE:   cir.return %{{.*}} : !cir.bool
 
 // CIR-AFTER-LABEL: cir.func {{.*}}@"?test_bool_method@@YA_NP8M@@EAAXXZ@Z"
+// CIR-AFTER:   %[[FN_VAR:.*]] = cir.alloca "fn"
+// CIR-AFTER:   %[[FN_STRUCT:.*]] = cir.load {{.*}}%[[FN_VAR]]
 // CIR-AFTER:   %[[NULL_PTR:.*]] = cir.const #cir.ptr<null> : !cir.ptr<!void>
-// CIR-AFTER:   %[[FN_PTR:.*]] = cir.extract_member %{{.*}}[0] : !rec_anon_struct2 -> !cir.ptr<!void>
+// CIR-AFTER:   %[[FN_PTR:.*]] = cir.extract_member %[[FN_STRUCT]][0] : !rec_anon_struct2 -> !cir.ptr<!void>
 // CIR-AFTER:   %[[CMP:.*]] = cir.cmp ne %[[FN_PTR]], %[[NULL_PTR]] : !cir.ptr<!void>
 // CIR-AFTER:   cir.return %{{.*}} : !cir.bool
 
@@ -169,19 +192,42 @@ bool test_cmp_method(void (M::*f1)(), void (M::*f2)()) {
 // CIR-BEFORE:   cir.return %{{.*}} : !cir.bool
 
 // CIR-AFTER-LABEL: cir.func {{.*}}@"?test_cmp_method@@YA_NP8M@@EAAXXZ0@Z"
-// CIR-AFTER:   %[[LHS_FN:.*]] = cir.extract_member %{{.*}}[0] : !rec_anon_struct2 -> !cir.ptr<!void>
-// CIR-AFTER:   %[[RHS_FN:.*]] = cir.extract_member %{{.*}}[0] : !rec_anon_struct2 -> !cir.ptr<!void>
+// CIR-AFTER:   %[[F1:.*]] = cir.alloca "f1"
+// CIR-AFTER:   %[[F2:.*]] = cir.alloca "f2"
+// CIR-AFTER:   %[[LHS:.*]] = cir.load {{.*}}%[[F1]]
+// CIR-AFTER:   %[[RHS:.*]] = cir.load {{.*}}%[[F2]]
+// CIR-AFTER:   %[[LHS_FN:.*]] = cir.extract_member %[[LHS]][0] : !rec_anon_struct2 -> !cir.ptr<!void>
+// CIR-AFTER:   %[[RHS_FN:.*]] = cir.extract_member %[[RHS]][0] : !rec_anon_struct2 -> !cir.ptr<!void>
 // CIR-AFTER:   %[[FN_CMP:.*]] = cir.cmp eq %[[LHS_FN]], %[[RHS_FN]] : !cir.ptr<!void>
 // CIR-AFTER:   %[[NULL_PTR:.*]] = cir.const #cir.ptr<null> : !cir.ptr<!void>
 // CIR-AFTER:   %[[IS_NULL:.*]] = cir.cmp eq %[[LHS_FN]], %[[NULL_PTR]] : !cir.ptr<!void>
-// CIR-AFTER:   %[[LHS_ADJ:.*]] = cir.extract_member %{{.*}}[1] : !rec_anon_struct2 -> !s32i
-// CIR-AFTER:   %[[RHS_ADJ:.*]] = cir.extract_member %{{.*}}[1] : !rec_anon_struct2 -> !s32i
+// CIR-AFTER:   %[[LHS_ADJ:.*]] = cir.extract_member %[[LHS]][1] : !rec_anon_struct2 -> !s32i
+// CIR-AFTER:   %[[RHS_ADJ:.*]] = cir.extract_member %[[RHS]][1] : !rec_anon_struct2 -> !s32i
 // CIR-AFTER:   %[[ADJ_CMP:.*]] = cir.cmp eq %[[LHS_ADJ]], %[[RHS_ADJ]] : !s32i
 // CIR-AFTER:   %[[NULL_OR_EQ:.*]] = cir.or %[[IS_NULL]], %[[ADJ_CMP]] : !cir.bool
 // CIR-AFTER:   %[[IS_EQ:.*]] = cir.and %[[FN_CMP]], %[[NULL_OR_EQ]] : !cir.bool
 // CIR-AFTER:   cir.return %{{.*}} : !cir.bool
 
-// Test base to derived conversion
+// Test base to derived data member conversion
+int M::*test_data_conversion(int S::*p) {
+  return p;
+}
+// CIR-BEFORE-LABEL: cir.func {{.*}}@"?test_data_conversion@@YAPEQM@@HPEQS@@H@Z"
+// CIR-BEFORE:   %[[SRC:.*]] = cir.load {{.*}} : !cir.ptr<!cir.data_member<!s32i in !rec_S, single>>, !cir.data_member<!s32i in !rec_S, single>
+// CIR-BEFORE:   %[[DERIVED:.*]] = cir.derived_data_member %[[SRC]][16] : !cir.data_member<!s32i in !rec_S, single> -> !cir.data_member<!s32i in !rec_M, multiple>
+// CIR-BEFORE:   cir.return %{{.*}} : !cir.data_member<!s32i in !rec_M, multiple>
+
+// CIR-AFTER-LABEL: cir.func {{.*}}@"?test_data_conversion@@YAPEQM@@HPEQS@@H@Z"
+// CIR-AFTER:   %[[SRC_VAL:.*]] = cir.load {{.*}} : !cir.ptr<!s32i>, !s32i
+// CIR-AFTER:   %[[SRC_NULL:.*]] = cir.const #cir.int<-1> : !s32i
+// CIR-AFTER:   %[[IS_NULL:.*]] = cir.cmp eq %[[SRC_VAL]], %[[SRC_NULL]] : !s32i
+// CIR-AFTER:   %[[DST_NULL:.*]] = cir.const #cir.int<0> : !s32i
+// CIR-AFTER:   %[[OFFSET:.*]] = cir.const #cir.int<16> : !s32i
+// CIR-AFTER:   %[[ADJ:.*]] = cir.add nsw %[[SRC_VAL]], %[[OFFSET]] : !s32i
+// CIR-AFTER:   %[[NEW_VAL:.*]] = cir.select if %[[IS_NULL]] then %[[DST_NULL]] else %[[ADJ]] : (!cir.bool, !s32i, !s32i) -> !s32i
+// CIR-AFTER:   cir.return %{{.*}} : !s32i
+
+// Test base to derived method conversion
 void (M::*test_conversion(void (S::*fn)()))() {
   return fn;
 }
@@ -192,11 +238,12 @@ void (M::*test_conversion(void (S::*fn)()))() {
 
 // CIR-AFTER-LABEL: cir.func {{.*}}@"?test_conversion@@YAP8M@@EAAXXZP8S@@EAAXXZ@Z"
 // CIR-AFTER:   %[[SRC_FN:.*]] = cir.load {{.*}} : !cir.ptr<!cir.ptr<!void>>, !cir.ptr<!void>
+// CIR-AFTER:   %[[ZERO_ADJ:.*]] = cir.const #cir.int<0> : !s32i
 // CIR-AFTER:   %[[NULL_PTR:.*]] = cir.const #cir.ptr<null> : !cir.ptr<!void>
 // CIR-AFTER:   %[[IS_NULL:.*]] = cir.cmp eq %[[SRC_FN]], %[[NULL_PTR]] : !cir.ptr<!void>
 // CIR-AFTER:   %[[OFFSET:.*]] = cir.const #cir.int<16> : !s32i
-// CIR-AFTER:   %[[ADJ:.*]] = cir.add nsw %{{.*}}, %[[OFFSET]] : !s32i
-// CIR-AFTER:   %[[NEW_ADJ:.*]] = cir.select if %[[IS_NULL]] then %{{.*}} else %[[ADJ]] : (!cir.bool, !s32i, !s32i) -> !s32i
+// CIR-AFTER:   %[[ADJ:.*]] = cir.add nsw %[[ZERO_ADJ]], %[[OFFSET]] : !s32i
+// CIR-AFTER:   %[[NEW_ADJ:.*]] = cir.select if %[[IS_NULL]] then %[[ZERO_ADJ]] else %[[ADJ]] : (!cir.bool, !s32i, !s32i) -> !s32i
 // CIR-AFTER:   %[[ZERO_STRUCT:.*]] = cir.const #cir.zero : !rec_anon_struct2
 // CIR-AFTER:   %[[RES0:.*]] = cir.insert_member %[[ZERO_STRUCT]][0], %[[SRC_FN]] : !rec_anon_struct2, !cir.ptr<!void>
 // CIR-AFTER:   %[[RES1:.*]] = cir.insert_member %[[RES0]][1], %[[NEW_ADJ]] : !rec_anon_struct2, !s32i
