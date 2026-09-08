@@ -832,7 +832,7 @@ void CIRGenFunction::generateThunk(cir::FuncOp fn,
   // that CIRGenModule doesn't try to set attributes.
   mlir::Type ty;
   if (isUnprototyped)
-    cgm.errorNYI("unprototyped thunk placeholder type");
+    ty = builder.getVoidTy();
   else
     ty = cgm.getTypes().getFunctionType(fnInfo);
 
@@ -896,8 +896,7 @@ cir::FuncOp CIRGenVTables::maybeEmitThunk(GlobalDecl gd,
   // Arrange a function prototype appropriate for a function definition. In some
   // cases in the MS ABI, we may need to build an unprototyped musttail thunk.
   const CIRGenFunctionInfo &fnInfo =
-      isUnprototyped ? (cgm.errorNYI("unprototyped must-tail thunk"),
-                        cgm.getTypes().arrangeGlobalDeclaration(gd))
+      isUnprototyped ? cgm.getTypes().arrangeUnprototypedMustTailThunk(md)
                      : cgm.getTypes().arrangeGlobalDeclaration(gd);
   cir::FuncType thunkFnTy = cgm.getTypes().getFunctionType(fnInfo);
 
@@ -912,9 +911,13 @@ cir::FuncOp CIRGenVTables::maybeEmitThunk(GlobalDecl gd,
     // Remove the name from the old thunk function and get a new thunk.
     cgm.eraseGlobalSymbol(oldThunkFn);
     oldThunkFn.setName(StringRef());
-    thunkFn =
-        cir::FuncOp::create(cgm.getBuilder(), thunk->getLoc(), name.str(),
-                            thunkFnTy, cir::GlobalLinkageKind::ExternalLinkage);
+    {
+      mlir::OpBuilder::InsertionGuard guard(cgm.getBuilder());
+      cgm.getBuilder().setInsertionPoint(oldThunkFn);
+      thunkFn =
+          cir::FuncOp::create(cgm.getBuilder(), thunk->getLoc(), name.str(),
+                              thunkFnTy, cir::GlobalLinkageKind::ExternalLinkage);
+    }
     cgm.insertGlobalSymbol(thunkFn);
     cgm.setCIRFunctionAttributes(md, fnInfo, thunkFn, /*isThunk=*/false);
 
@@ -940,7 +943,9 @@ cir::FuncOp CIRGenVTables::maybeEmitThunk(GlobalDecl gd,
     return thunkFn;
   }
 
-  // TODO(cir): Add "thunk" attribute if unprototyped.
+  if (isUnprototyped)
+    thunkFn->setAttr("thunk",
+                     mlir::UnitAttr::get(cgm.getBuilder().getContext()));
 
   cgm.setCIRFunctionAttributesForDefinition(cast<FunctionDecl>(gd.getDecl()),
                                             thunkFn);

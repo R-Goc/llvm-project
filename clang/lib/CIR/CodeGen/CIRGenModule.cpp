@@ -3576,13 +3576,27 @@ cir::FuncOp CIRGenModule::getOrCreateCIRFunction(
     // How will we support this?
   }
 
+  bool isIncompleteFunction = false;
+  cir::FuncType cirFuncType;
+  if (auto ft = mlir::dyn_cast<cir::FuncType>(funcType)) {
+    cirFuncType = ft;
+  } else {
+    cirFuncType = cir::FuncType::get(getBuilder().getContext(), {},
+                                     /*optionalReturnType=*/nullptr,
+                                     /*isVarArg=*/true);
+    isIncompleteFunction = true;
+  }
+
   auto *funcDecl = llvm::cast_or_null<FunctionDecl>(gd.getDecl());
   bool invalidLoc = !funcDecl ||
                     funcDecl->getSourceRange().getBegin().isInvalid() ||
                     funcDecl->getSourceRange().getEnd().isInvalid();
   cir::FuncOp funcOp = createCIRFunction(
       invalidLoc ? theModule->getLoc() : getLoc(funcDecl->getSourceRange()),
-      mangledName, mlir::cast<cir::FuncType>(funcType), funcDecl);
+      mangledName, cirFuncType, funcDecl);
+
+  if (isIncompleteFunction)
+    funcOp.setNoProto(true);
 
   if (funcDecl && funcDecl->hasAttr<AnnotateAttr>())
     deferredAnnotations[mangledName] = funcDecl;
@@ -3613,7 +3627,7 @@ cir::FuncOp CIRGenModule::getOrCreateCIRFunction(
   }
 
   if (d)
-    setFunctionAttributes(gd, funcOp, /*isIncompleteFunction=*/false, isThunk);
+    setFunctionAttributes(gd, funcOp, isIncompleteFunction, isThunk);
   if (!extraAttrs.empty()) {
     extraAttrs.append(funcOp->getAttrs());
     funcOp->setAttrs(extraAttrs);
@@ -3621,9 +3635,7 @@ cir::FuncOp CIRGenModule::getOrCreateCIRFunction(
 
   // 'dontDefer' actually means don't move this to the deferredDeclsToEmit list.
   if (dontDefer) {
-    // TODO(cir): This assertion will need an additional condition when we
-    // support incomplete functions.
-    assert(funcOp.getFunctionType() == funcType);
+    assert(isIncompleteFunction || funcOp.getFunctionType() == funcType);
     return funcOp;
   }
 

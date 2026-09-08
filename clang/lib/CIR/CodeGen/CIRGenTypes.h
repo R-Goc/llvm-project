@@ -223,6 +223,9 @@ public:
                        const clang::FunctionProtoType *ftp,
                        const clang::CXXMethodDecl *md);
 
+  const CIRGenFunctionInfo &
+  arrangeUnprototypedMustTailThunk(const clang::CXXMethodDecl *md);
+
   const CIRGenFunctionInfo &arrangeFreeFunctionCall(const CallArgList &args,
                                                     const FunctionType *fnType);
 

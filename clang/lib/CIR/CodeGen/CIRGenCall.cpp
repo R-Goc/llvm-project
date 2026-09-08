@@ -922,8 +922,7 @@ void CIRGenFunction::emitDelegateCallArg(CallArgList &args,
   }
 
   // Deactivate the cleanup for the callee-destructed param that was pushed.
-  assert(!cir::MissingFeatures::thunks());
-  if (type->isRecordType() &&
+  if (type->isRecordType() && !curFuncIsThunk &&
       type->castAsRecordDecl()->isParamDestroyedInCallee() &&
       param->needsDestruction(getContext())) {
     cgm.errorNYI(param->getSourceRange(),
@@ -1085,6 +1084,17 @@ CIRGenTypes::arrangeCXXMethodType(const CXXRecordDecl *rd,
   return ::arrangeCIRFunctionInfo(
       *this, /*isInstanceMethod=*/true, argTypes,
       fpt->getCanonicalTypeUnqualified().getAs<FunctionProtoType>());
+}
+
+const CIRGenFunctionInfo &
+CIRGenTypes::arrangeUnprototypedMustTailThunk(const CXXMethodDecl *md) {
+  assert(md->isVirtual() && "only methods have thunks");
+  CanQual<FunctionProtoType> ftp =
+      md->getType()->getCanonicalTypeUnqualified().getAs<FunctionProtoType>();
+  CanQualType argTys[] = {deriveThisType(md->getParent(), md)};
+  return arrangeCIRFunctionInfo(astContext.VoidTy,
+                                /*isInstanceMethod=*/false, argTys,
+                                ftp->getExtInfo(), RequiredArgs(1));
 }
 
 /// Arrange the argument and result information for the declaration or
