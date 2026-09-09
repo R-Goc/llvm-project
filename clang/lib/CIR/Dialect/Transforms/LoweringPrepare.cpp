@@ -13,8 +13,11 @@
 #include "mlir/IR/Location.h"
 #include "mlir/IR/Value.h"
 #include "clang/AST/ASTContext.h"
+#include "clang/AST/Attr.h"
+#include "clang/AST/DeclTemplate.h"
 #include "clang/AST/Mangle.h"
 #include "clang/Basic/Cuda.h"
+#include "clang/Basic/Linkage.h"
 #include "clang/Basic/Module.h"
 #include "clang/Basic/SourceManager.h"
 #include "clang/Basic/Specifiers.h"
@@ -363,6 +366,66 @@ struct LoweringPreparePass
                                    cir::GlobalOp global,
                                    mlir::Region &dtorRegion, bool tls,
                                    mlir::Block &entryBB) {
+    if (astCtx->getCXXABIKind() == clang::TargetCXXABI::Microsoft) {
+      // In Microsoft ABI, destructors are registered via standard atexit with
+      // a nullary stub:
+      //   int atexit(void (*func)(void));
+      // The stub function is mangled as ??__F<var>@@YAXXZ.
+      SmallString<256> stubName;
+      const clang::VarDecl *varDecl = nullptr;
+      if (auto astVarDecl =
+              mlir::dyn_cast_or_null<cir::ASTVarDeclAttr>(global.getAstAttr()))
+        varDecl = astVarDecl.getAst();
+
+      assert(varDecl && "Expected VarDecl for MSVC dynamic destructor");
+      {
+        llvm::raw_svector_ostream out(stubName);
+        std::unique_ptr<clang::MangleContext> mangleCtx(
+            astCtx->createMangleContext());
+        mangleCtx->mangleDynamicAtExitDestructor(varDecl, out);
+      }
+
+      // Create nullary dtor stub function: void ??__F...()
+      cir::CIRBaseBuilderTy globalBuilder(getContext());
+      globalBuilder.setInsertionPointAfter(global);
+      auto voidTy = builder.getVoidTy();
+      auto stubFnType = cir::FuncType::get({}, voidTy);
+      cir::FuncOp dtorStub = buildRuntimeFunction(
+          globalBuilder, stubName, global.getLoc(), stubFnType,
+          cir::GlobalLinkageKind::InternalLinkage);
+
+      // Move dtorRegion body into the stub function.
+      mlir::Block *stubEntryBB = dtorStub.addEntryBlock();
+      mlir::Block &dtorBlock = dtorRegion.front();
+      stubEntryBB->getOperations().splice(stubEntryBB->end(),
+                                          dtorBlock.getOperations(),
+                                          dtorBlock.begin(),
+                                          std::prev(dtorBlock.end()));
+      cir::CIRBaseBuilderTy stubBuilder(getContext());
+      stubBuilder.setInsertionPointToEnd(stubEntryBB);
+      cir::ReturnOp::create(stubBuilder, global.getLoc());
+
+      // Register the stub function with atexit in entryBB.
+      builder.setInsertionPointToEnd(&entryBB);
+      cir::CIRBaseBuilderTy moduleBuilder(getContext());
+      moduleBuilder.setInsertionPointToStart(mlirModule.getBody());
+      IntType intTy = builder.getSIntNTy(32);
+      auto voidFnPtrTy = builder.getVoidFnPtrTy({});
+      auto atexitFnTy = cir::FuncType::get({voidFnPtrTy}, intTy);
+      cir::FuncOp fnAtExit = buildRuntimeFunction(
+          moduleBuilder, "atexit", global.getLoc(), atexitFnTy);
+
+      auto stubPtrTy = cir::PointerType::get(dtorStub.getFunctionType());
+      mlir::Value dtorStubVal = cir::GetGlobalOp::create(
+          builder, global.getLoc(), stubPtrTy, dtorStub.getSymName());
+      cir::CallOp atexitCall = builder.createCallOp(
+          global.getLoc(), fnAtExit, mlir::ValueRange{dtorStubVal});
+      atexitCall.setNothrowAttr(builder.getUnitAttr());
+      dtorRegion.getBlocks().clear();
+      builder.setInsertionPointToEnd(&entryBB);
+      return;
+    }
+
     // Create a variable that binds the atexit to this shared object.
     builder.setInsertionPointToStart(&mlirModule.getBodyRegion().front());
     cir::GlobalOp handle = getOrCreateRuntimeVariable(
@@ -1200,21 +1263,46 @@ cir::FuncOp LoweringPreparePass::getOrCreateDtorFunc(CIRBaseBuilderTy &builder,
 
 cir::FuncOp
 LoweringPreparePass::buildCXXGlobalVarDeclInitFunc(cir::GlobalOp op) {
-  // TODO(cir): Store this in the GlobalOp.
-  // This should come from the MangleContext, but for now I'm hardcoding it.
-  SmallString<256> fnName("__cxx_global_var_init");
-  // Get a unique name
-  uint32_t cnt = dynamicInitializerNames[fnName]++;
-  if (cnt)
-    fnName += "." + std::to_string(cnt);
+  SmallString<256> fnName;
+  cir::GlobalLinkageKind linkage = cir::GlobalLinkageKind::InternalLinkage;
+
+  const clang::VarDecl *varDecl = nullptr;
+  if (auto astVarDecl =
+          mlir::dyn_cast_or_null<cir::ASTVarDeclAttr>(op.getAstAttr()))
+    varDecl = astVarDecl.getAst();
+
+  if (astCtx->getCXXABIKind() == clang::TargetCXXABI::Microsoft) {
+    assert(varDecl && "Expected VarDecl for MSVC dynamic initializer");
+    llvm::raw_svector_ostream out(fnName);
+    std::unique_ptr<clang::MangleContext> mangleCtx(
+        astCtx->createMangleContext());
+    mangleCtx->mangleDynamicInitializer(varDecl, out);
+
+    if (clang::isTemplateInstantiation(
+            varDecl->getTemplateSpecializationKind()) ||
+        !clang::isUniqueGVALinkage(
+            astCtx->GetGVALinkageForVariable(varDecl)) ||
+        varDecl->hasAttr<clang::SelectAnyAttr>()) {
+      linkage = cir::GlobalLinkageKind::LinkOnceODRLinkage;
+    }
+  }
+
+  if (fnName.empty()) {
+    fnName = "__cxx_global_var_init";
+    uint32_t cnt = dynamicInitializerNames[fnName]++;
+    if (cnt)
+      fnName += "." + std::to_string(cnt);
+  }
 
   // Create a variable initialization function.
   CIRBaseBuilderTy builder(getContext());
   builder.setInsertionPointAfter(op);
   cir::VoidType voidTy = builder.getVoidTy();
   auto fnType = cir::FuncType::get({}, voidTy);
-  FuncOp f = buildRuntimeFunction(builder, fnName, op.getLoc(), fnType,
-                                  cir::GlobalLinkageKind::InternalLinkage);
+  FuncOp f =
+      buildRuntimeFunction(builder, fnName, op.getLoc(), fnType, linkage);
+  if (linkage == cir::GlobalLinkageKind::LinkOnceODRLinkage)
+    f.setComdat(true);
 
   // Forward the constrained floating-point marker recorded on the global by
   // CodeGen onto the generated initializer function. The marker on the global
@@ -1248,15 +1336,19 @@ LoweringPreparePass::buildCXXGlobalVarDeclInitFunc(cir::GlobalOp op) {
     builder.setInsertionPointToEnd(&guardIf.getThenRegion().front());
   }
 
+  mlir::Location loc = op.getLoc();
   if (!op.getCtorRegion().empty()) {
+    loc = op.getCtorRegion().front().getOperations().back().getLoc();
     mlir::Block &block = op.getCtorRegion().front();
     mlir::Block *insertBlock = builder.getBlock();
     insertBlock->getOperations().splice(insertBlock->end(),
                                         block.getOperations(), block.begin(),
                                         std::prev(block.end()));
+  } else if (!op.getDtorRegion().empty()) {
+    loc = op.getDtorRegion().front().getOperations().back().getLoc();
   }
 
-  // Register the destructor call with __cxa_atexit
+  // Register the destructor call with __cxa_atexit or atexit
   mlir::Region &dtorRegion = op.getDtorRegion();
   if (!dtorRegion.empty()) {
     assert(!cir::MissingFeatures::astVarDeclInterface());
@@ -1274,18 +1366,7 @@ LoweringPreparePass::buildCXXGlobalVarDeclInitFunc(cir::GlobalOp op) {
 
   // Replace cir.yield with cir.return
   builder.setInsertionPointToEnd(entryBB);
-  mlir::Operation *yieldOp = nullptr;
-  if (!op.getCtorRegion().empty()) {
-    mlir::Block &block = op.getCtorRegion().front();
-    yieldOp = &block.getOperations().back();
-  } else {
-    assert(!dtorRegion.empty());
-    mlir::Block &block = dtorRegion.front();
-    yieldOp = &block.getOperations().back();
-  }
-
-  assert(isa<cir::YieldOp>(*yieldOp));
-  cir::ReturnOp::create(builder, yieldOp->getLoc());
+  cir::ReturnOp::create(builder, loc);
   return f;
 }
 
@@ -1701,6 +1782,9 @@ void LoweringPreparePass::lowerGlobalOp(GlobalOp op) {
       }
     } else if (std::optional<uint32_t> priority = op.getInitPriority()) {
       prioritizedDynamicInitializers[*priority].push_back(f);
+    } else if (f.getLinkage() == cir::GlobalLinkageKind::LinkOnceODRLinkage) {
+      globalCtorList.emplace_back(f.getName(),
+                                  cir::GlobalCtorAttr::getDefaultPriority());
     } else {
       dynamicInitializers.push_back(f);
     }
