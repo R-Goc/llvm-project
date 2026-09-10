@@ -4187,7 +4187,11 @@ def CIR_CallingConv : CIR_I32Enum<"CallingConv", "calling convention", [
   I32EnumCase<"PTXKernel", 1, "ptx_kernel">,
   I32EnumCase<"SpirFunction", 2, "spir_function">,
   I32EnumCase<"SpirKernel", 3, "spir_kernel">,
-  I32EnumCase<"AMDGPUKernel", 4, "amdgpu_kernel">
+  I32EnumCase<"AMDGPUKernel", 4, "amdgpu_kernel">,
+  I32EnumCase<"X86_StdCall", 5, "x86_stdcall">,
+  I32EnumCase<"X86_FastCall", 6, "x86_fastcall">,
+  I32EnumCase<"X86_ThisCall", 7, "x86_thiscall">,
+  I32EnumCase<"X86_VectorCall", 8, "x86_vectorcall">
 ]>;
 
 def CIR_CallingConvAttr : CIR_EnumAttr<CIR_CallingConv, "calling_conv">;
@@ -4602,7 +4606,8 @@ class CIR_CallOpBase<string mnemonic, list<Trait> extra_traits = []>
       UnitAttr:$musttail,
       DefaultValuedAttr<CIR_SideEffectAttr, "SideEffect::All">:$side_effect,
       OptionalAttr<DictArrayAttr>:$arg_attrs,
-      OptionalAttr<DictArrayAttr>:$res_attrs
+      OptionalAttr<DictArrayAttr>:$res_attrs,
+      DefaultValuedAttr<CIR_CallingConvAttr, "cir::CallingConv::C">:$calling_conv
       );
 }
 

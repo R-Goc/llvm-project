@@ -69,7 +69,6 @@ struct MissingFeatures {
   static bool opFuncColdHotAttr() { return false; }
   static bool opFuncExceptions() { return false; }
   static bool opFuncExtraAttrs() { return false; }
-  static bool opFuncCallingConv() { return false; }
   static bool opFuncMaybeHandleStaticInExternC() { return false; }
   static bool opFuncMinSizeAttr() { return false; }
   static bool opFuncMultipleReturnVals() { return false; }
@@ -88,7 +87,6 @@ struct MissingFeatures {
   static bool opCallPaddingArgs() { return false; }
   static bool opCallBitcastArg() { return false; }
   static bool opCallReturn() { return false; }
-  static bool opCallCallConv() { return false; }
   static bool opCallThunkTailHint() { return false; }
   static bool opCallInAlloca() { return false; }
   static bool opCallAttrs() { return false; }

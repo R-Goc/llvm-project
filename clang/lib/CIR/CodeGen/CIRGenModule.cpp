@@ -2237,8 +2237,8 @@ generateStringLiteral(mlir::Location loc, mlir::TypedAttr c,
 
   // Set up extra information and add to the module
   gv.setAlignmentAttr(cgm.getSize(alignment));
-  gv.setLinkageAttr(
-      cir::GlobalLinkageKindAttr::get(cgm.getBuilder().getContext(), linkageKind));
+  gv.setLinkageAttr(cir::GlobalLinkageKindAttr::get(
+      cgm.getBuilder().getContext(), linkageKind));
   assert(!cir::MissingFeatures::opGlobalThreadLocal());
   assert(!cir::MissingFeatures::opGlobalUnnamedAddr());
   CIRGenModule::setInitializer(gv, c);
@@ -3856,7 +3856,6 @@ cir::FuncOp CIRGenModule::createRuntimeFunction(cir::FuncType ty,
   if (entry) {
     // TODO(cir): set the attributes of the function.
     assert(!cir::MissingFeatures::setLLVMFunctionFEnvAttributes());
-    assert(!cir::MissingFeatures::opFuncCallingConv());
     setWindowsItaniumDLLImport(*this, isLocal, entry, name);
     entry.setDSOLocal(true);
   }

@@ -2079,18 +2079,12 @@ mlir::Value CIRGenItaniumCXXABI::getVirtualBaseClassOffset(
 static cir::FuncOp getBadCastFn(CIRGenFunction &cgf) {
   // Prototype: void __cxa_bad_cast();
 
-  // TODO(cir): set the calling convention of the runtime function.
-  assert(!cir::MissingFeatures::opFuncCallingConv());
-
   cir::FuncType fnTy =
       cgf.getBuilder().getFuncType({}, cgf.getBuilder().getVoidTy());
   return cgf.cgm.createRuntimeFunction(fnTy, "__cxa_bad_cast");
 }
 
 static void emitCallToBadCast(CIRGenFunction &cgf, mlir::Location loc) {
-  // TODO(cir): set the calling convention to the runtime function.
-  assert(!cir::MissingFeatures::opFuncCallingConv());
-
   mlir::NamedAttrList attrs;
   attrs.set(cir::CIRDialect::getNoReturnAttrName(),
             mlir::UnitAttr::get(&cgf.cgm.getMLIRContext()));
@@ -2171,9 +2165,6 @@ static cir::FuncOp getItaniumDynamicCastFn(CIRGenFunction &cgf) {
   // TODO(cir): mark the function as willreturn readonly.
   assert(!cir::MissingFeatures::opFuncWillReturn());
   assert(!cir::MissingFeatures::opFuncReadOnly());
-
-  // TODO(cir): set the calling convention of the runtime function.
-  assert(!cir::MissingFeatures::opFuncCallingConv());
 
   cir::FuncType FTy = cgf.getBuilder().getFuncType(
       {voidPtrTy, rttiPtrTy, rttiPtrTy, ptrDiffTy}, voidPtrTy);
