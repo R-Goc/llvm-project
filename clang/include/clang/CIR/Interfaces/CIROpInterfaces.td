@@ -84,6 +84,13 @@ let cppNamespace = "::cir" in {
                       /*defaultImplementation=*/[{
                         $_op.setCallingConv(callingConv);
                       }]>,
+      InterfaceMethod<[{"Get the calling convention attribute name"}],
+                      "mlir::StringAttr", "getCallingConvAttrName",
+                      (ins), [{}],
+                      /*defaultImplementation=*/[{
+                        return $_op.getCallingConvAttrName();
+                      }]>,
+                      }]>,
     ];
   }
 

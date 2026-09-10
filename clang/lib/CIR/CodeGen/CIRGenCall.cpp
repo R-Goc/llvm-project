@@ -1609,15 +1609,15 @@ mlir::Value CIRGenFunction::emitRuntimeCall(mlir::Location loc,
                                             ArrayRef<mlir::Value> args,
                                             mlir::NamedAttrList attrs) {
 
-  // TODO(cir): set the calling convention to this runtime call.
-  assert(!cir::MissingFeatures::opFuncCallingConv());
-
   cir::CallOp call = builder.createCallOp(loc, callee, args);
   assert(call->getNumResults() <= 1 &&
          "runtime functions have at most 1 result");
 
   if (!attrs.empty())
     call->setAttrs(attrs);
+
+  if (callee.getCallingConv() != cir::CallingConv::C)
+    call.setCallingConv(callee.getCallingConv());
 
   if (call->getNumResults() == 0)
     return nullptr;
@@ -1705,11 +1705,8 @@ RValue CIRGenFunction::emitAnyExprToTemp(const Expr *e) {
 void CIRGenFunction::emitCallArgs(
     CallArgList &args, PrototypeWrapper prototype,
     llvm::iterator_range<clang::CallExpr::const_arg_iterator> argRange,
-    AbstractCallee callee, unsigned paramsToSkip,
-    EvaluationOrder order) {
+    AbstractCallee callee, unsigned paramsToSkip, EvaluationOrder order) {
   llvm::SmallVector<QualType, 16> argTypes;
-
-  assert(!cir::MissingFeatures::opCallCallConv());
 
   // First, if a prototype was provided, use those argument types.
   bool isVariadic = false;
@@ -1718,7 +1715,6 @@ void CIRGenFunction::emitCallArgs(
 
     const auto *fpt = cast<const FunctionProtoType *>(prototype.p);
     isVariadic = fpt->isVariadic();
-    assert(!cir::MissingFeatures::opCallCallConv());
     argTypes.assign(fpt->param_type_begin() + paramsToSkip,
                     fpt->param_type_end());
   }

@@ -262,8 +262,7 @@ public:
     return 1;
   }
 
-  const CXXRecordDecl *
-  getThisArgumentTypeForMethod(GlobalDecl gd) override;
+  const CXXRecordDecl *getThisArgumentTypeForMethod(GlobalDecl gd) override;
 
   Address adjustThisArgumentForVirtualFunctionCall(CIRGenFunction &cgf,
                                                    GlobalDecl gd,
@@ -1502,8 +1501,8 @@ CIRGenMicrosoftCXXABI::performBaseAdjustment(CIRGenFunction &cgf,
 
   mlir::Value offset =
       getVirtualBaseClassOffset(loc, cgf, value, srcDecl, polymorphicBase);
-  mlir::Value adjusted = cir::PtrStrideOp::create(
-      builder, loc, u8PtrTy, byteVal.getPointer(), offset);
+  mlir::Value adjusted = cir::PtrStrideOp::create(builder, loc, u8PtrTy,
+                                                  byteVal.getPointer(), offset);
   CharUnits vbaseAlign =
       cgm.getVBaseAlignment(value.getAlignment(), srcDecl, polymorphicBase);
   return std::make_tuple(Address(adjusted, u8Ty, vbaseAlign), offset,
@@ -1550,13 +1549,13 @@ void CIRGenMicrosoftCXXABI::emitBadCastCall(CIRGenFunction &cgf,
   cgm.errorNYI(loc, "emitBadCastCall: MSVC ABI");
 }
 
-mlir::Value
-CIRGenMicrosoftCXXABI::getRTTIDescriptorPtr(CIRGenFunction &cgf,
-                                           mlir::Location loc, QualType ty) {
+mlir::Value CIRGenMicrosoftCXXABI::getRTTIDescriptorPtr(CIRGenFunction &cgf,
+                                                        mlir::Location loc,
+                                                        QualType ty) {
   CIRGenBuilderTy &builder = cgf.getBuilder();
   auto rttiAttr = cast<cir::GlobalViewAttr>(getAddrOfRTTIDescriptor(loc, ty));
-  auto gv = cast<cir::GlobalOp>(
-      cgm.getGlobalValue(rttiAttr.getSymbol().getValue()));
+  auto gv =
+      cast<cir::GlobalOp>(cgm.getGlobalValue(rttiAttr.getSymbol().getValue()));
   mlir::Value gvAddr = cir::GetGlobalOp::create(
       builder, loc, builder.getPointerTo(gv.getSymType()), gv.getSymName());
   return builder.createBitcast(gvAddr, builder.getVoidPtrTy());
@@ -1573,8 +1572,8 @@ mlir::Value CIRGenMicrosoftCXXABI::emitDynamicCast(
     Address value = src;
     std::tie(value, std::ignore, std::ignore) =
         performBaseAdjustment(cgf, loc, value, srcRecordTy);
-    cir::FuncType fnTy = builder.getFuncType({builder.getVoidPtrTy()},
-                                             builder.getVoidPtrTy());
+    cir::FuncType fnTy =
+        builder.getFuncType({builder.getVoidPtrTy()}, builder.getVoidPtrTy());
     cir::FuncOp fn = cgm.createRuntimeFunction(fnTy, "__RTCastToVoid");
     mlir::Value rawPtr =
         builder.createBitcast(value.getPointer(), builder.getVoidPtrTy());
@@ -1616,10 +1615,9 @@ mlir::Value CIRGenMicrosoftCXXABI::emitDynamicCast(
   };
 
   bool shouldNullCheck =
-      !isRefCast &&
-      !cgm.getASTContext()
-           .getASTRecordLayout(srcRecordTy->getAsCXXRecordDecl())
-           .hasExtendableVFPtr();
+      !isRefCast && !cgm.getASTContext()
+                         .getASTRecordLayout(srcRecordTy->getAsCXXRecordDecl())
+                         .hasExtendableVFPtr();
 
   if (shouldNullCheck) {
     mlir::Value isNull = builder.createPtrIsNull(src.getPointer());
@@ -1687,7 +1685,7 @@ void CIRGenMicrosoftCXXABI::emitRethrow(CIRGenFunction &cgf, bool isNoReturn) {
   if (isNoReturn) {
     CIRGenBuilderTy &builder = cgf.getBuilder();
     assert(cgf.currSrcLoc && "expected source location");
-    mlir::Location loc = *cgf.currSrcLoc;
+    mlir::Location loc = cgf.getLoc(*cgf.currSrcLoc);
     cir::ThrowOp::create(builder, loc, mlir::Value(), mlir::FlatSymbolRefAttr(),
                          mlir::FlatSymbolRefAttr());
     cir::UnreachableOp::create(builder, loc);
