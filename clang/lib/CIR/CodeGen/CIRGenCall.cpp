@@ -27,8 +27,9 @@ using namespace clang;
 using namespace clang::CIRGen;
 
 CIRGenFunctionInfo *CIRGenFunctionInfo::create(
-    FunctionType::ExtInfo info, bool isInstanceMethod, CanQualType resultType,
-    llvm::ArrayRef<CanQualType> argTypes, RequiredArgs required) {
+    cir::CallingConv callingConv, bool noReturn, bool instanceMethod,
+    CanQualType resultType, llvm::ArrayRef<CanQualType> argTypes,
+    RequiredArgs required) {
   // The first slot allocated for arg type slot is for the return value.
   void *buffer = operator new(
       totalSizeToAlloc<CanQualType>(argTypes.size() + 1));
@@ -37,8 +38,9 @@ CIRGenFunctionInfo *CIRGenFunctionInfo::create(
 
   CIRGenFunctionInfo *fi = new (buffer) CIRGenFunctionInfo();
 
-  fi->noReturn = info.getNoReturn();
-  fi->instanceMethod = isInstanceMethod;
+  fi->callingConvention = callingConv;
+  fi->noReturn = noReturn;
+  fi->instanceMethod = instanceMethod;
 
   fi->required = required;
   fi->numArgs = argTypes.size();
@@ -319,8 +321,12 @@ void CIRGenModule::constructAttributeList(
     llvm::MutableArrayRef<mlir::NamedAttrList> argAttrs,
     mlir::NamedAttrList &retAttrs, cir::CallingConv &callingConv,
     cir::SideEffect &sideEffect, bool attrOnCallSite, bool isThunk) {
-  assert(!cir::MissingFeatures::opCallCallConv());
   sideEffect = cir::SideEffect::All;
+  callingConv = info.getCallingConvention();
+  if (attrOnCallSite && callingConv != cir::CallingConv::C) {
+    attrs.set(cir::CIRDialect::getCallingConvAttrName(),
+              cir::CallingConvAttr::get(&getMLIRContext(), callingConv));
+  }
 
   auto addUnitAttr = [&](llvm::StringRef name) {
     attrs.set(name, mlir::UnitAttr::get(&getMLIRContext()));
@@ -579,7 +585,6 @@ static bool determineNoUndef(QualType clangTy, CIRGenTypes &types,
     // bits from the perspective of LLVM IR.
     return false;
 
-  assert(!cir::MissingFeatures::opCallCallConv());
   // TODO(cir): The calling convention code needs to figure if the
   // coerced-to-type is larger than the actual type, and remove the noundef
   // attribute. Classic compiler did it here.
@@ -1160,8 +1165,6 @@ emitCallLikeOp(CIRGenFunction &cgf, mlir::Location callLoc,
 
   cir::CallOp op;
   if (indirectFuncTy) {
-    // TODO(cir): Set calling convention for indirect calls.
-    assert(!cir::MissingFeatures::opCallCallConv());
     op = builder.createIndirectCallOp(callLoc, indirectFuncVal, indirectFuncTy,
                                       cirCallArgs, attrs, argAttrs, retAttrs);
   } else {
@@ -1314,7 +1317,6 @@ RValue CIRGenFunction::emitCall(const CIRGenFunctionInfo &funcInfo,
   if (auto calleeFuncOp = dyn_cast<cir::FuncOp>(calleePtr))
     funcName = calleeFuncOp.getName();
 
-  assert(!cir::MissingFeatures::opCallCallConv());
   assert(!cir::MissingFeatures::opCallAttrs());
   cir::CallingConv callingConv;
   cir::SideEffect sideEffect;
@@ -1493,15 +1495,15 @@ mlir::Value CIRGenFunction::emitRuntimeCall(mlir::Location loc,
                                             ArrayRef<mlir::Value> args,
                                             mlir::NamedAttrList attrs) {
 
-  // TODO(cir): set the calling convention to this runtime call.
-  assert(!cir::MissingFeatures::opFuncCallingConv());
-
   cir::CallOp call = builder.createCallOp(loc, callee, args);
   assert(call->getNumResults() <= 1 &&
          "runtime functions have at most 1 result");
 
   if (!attrs.empty())
     call->setAttrs(attrs);
+
+  if (callee.getCallingConv() != cir::CallingConv::C)
+    call.setCallingConv(callee.getCallingConv());
 
   if (call->getNumResults() == 0)
     return nullptr;
@@ -1593,8 +1595,6 @@ void CIRGenFunction::emitCallArgs(
     EvaluationOrder order) {
   llvm::SmallVector<QualType, 16> argTypes;
 
-  assert(!cir::MissingFeatures::opCallCallConv());
-
   // First, if a prototype was provided, use those argument types.
   bool isVariadic = false;
   if (prototype.p) {
@@ -1602,7 +1602,6 @@ void CIRGenFunction::emitCallArgs(
 
     const auto *fpt = cast<const FunctionProtoType *>(prototype.p);
     isVariadic = fpt->isVariadic();
-    assert(!cir::MissingFeatures::opCallCallConv());
     argTypes.assign(fpt->param_type_begin() + paramsToSkip,
                     fpt->param_type_end());
   }

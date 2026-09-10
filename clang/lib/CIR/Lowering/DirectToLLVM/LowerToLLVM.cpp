@@ -274,6 +274,14 @@ static mlir::LLVM::CConv convertCallingConv(cir::CallingConv callingConv) {
     return LLVM::PTX_Kernel;
   case CIR::AMDGPUKernel:
     return LLVM::AMDGPU_KERNEL;
+  case CIR::X86_StdCall:
+    return LLVM::X86_StdCall;
+  case CIR::X86_FastCall:
+    return LLVM::X86_FastCall;
+  case CIR::X86_ThisCall:
+    return LLVM::X86_ThisCall;
+  case CIR::X86_VectorCall:
+    return LLVM::X86_VectorCall;
   }
   llvm_unreachable("Unknown calling convention");
 }
@@ -2164,7 +2172,8 @@ static void lowerCallAttributes(cir::CIRCallOpInterface op,
         attr.getName() == CIRDialect::getNoUnwindAttrName() ||
         attr.getName() == CIRDialect::getNoReturnAttrName() ||
         attr.getName() == op.getInlineKindAttrName() ||
-        attr.getName() == CIRDialect::getMustTailAttrName())
+        attr.getName() == CIRDialect::getMustTailAttrName() ||
+        attr.getName() == CIRDialect::getCallingConvAttrName())
       continue;
 
     assert(!cir::MissingFeatures::opFuncExtraAttrs());
@@ -2193,8 +2202,6 @@ rewriteCallOrInvoke(mlir::Operation *op, mlir::ValueRange callOperands,
 
   if (converter->convertTypes(cirResults, llvmResults).failed())
     return mlir::failure();
-
-  assert(!cir::MissingFeatures::opCallCallConv());
 
   mlir::LLVM::MemoryEffectsAttr memoryEffects;
   bool noUnwind = false;
@@ -2257,17 +2264,21 @@ rewriteCallOrInvoke(mlir::Operation *op, mlir::ValueRange callOperands,
         converter->convertType(calleeFuncTy));
   }
 
-  assert(!cir::MissingFeatures::opCallCallConv());
+  mlir::LLVM::CConv cconv = convertCallingConv(call.getCallingConv());
 
   if (landingPadBlock) {
     auto newOp = rewriter.replaceOpWithNewOp<mlir::LLVM::InvokeOp>(
         op, llvmFnTy, calleeAttr, callOperands, continueBlock,
         mlir::ValueRange{}, landingPadBlock, mlir::ValueRange{});
     newOp->setAttrs(attributes);
+    if (cconv != mlir::LLVM::CConv::C)
+      newOp.setCConv(cconv);
   } else {
     auto newOp = rewriter.replaceOpWithNewOp<mlir::LLVM::CallOp>(
         op, llvmFnTy, calleeAttr, callOperands);
     newOp->setAttrs(attributes);
+    if (cconv != mlir::LLVM::CConv::C)
+      newOp.setCConv(cconv);
     if (memoryEffects)
       newOp.setMemoryEffectsAttr(memoryEffects);
     newOp.setNoUnwind(noUnwind);
@@ -2297,7 +2308,6 @@ mlir::LogicalResult CIRToLLVMCallOpLowering::matchAndRewrite(
 mlir::LogicalResult CIRToLLVMTryCallOpLowering::matchAndRewrite(
     cir::TryCallOp op, OpAdaptor adaptor,
     mlir::ConversionPatternRewriter &rewriter) const {
-  assert(!cir::MissingFeatures::opCallCallConv());
   return rewriteCallOrInvoke(
       op.getOperation(), adaptor.getOperands(), rewriter, getTypeConverter(),
       symbolTables, op.getCalleeAttr(), op.getNormalDest(), op.getUnwindDest());

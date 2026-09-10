@@ -117,7 +117,7 @@ void CIRGenModule::emitSYCLKernelCaller(const FunctionDecl *kernelEntryPointFn,
 
   // Emit as a device kernel (e.g. spir_kernel). Classic CodeGen derives this
   // from CC_DeviceKernel via SetLLVMFunctionAttributes; CIR does not yet route
-  // opFuncCallingConv onto the FuncOp, so set it from the target hook.
+  // CC_DeviceKernel onto the FuncOp, so set it from the target hook.
   funcOp.setCallingConv(getTargetCIRGenInfo().getDeviceKernelCallingConv());
 
   // Route through the shared attribute path so generic function attributes

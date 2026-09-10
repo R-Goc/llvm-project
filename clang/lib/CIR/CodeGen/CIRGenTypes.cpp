@@ -786,8 +786,10 @@ const CIRGenFunctionInfo &CIRGenTypes::arrangeCIRFunctionInfo(
   assert(llvm::all_of(argTypes,
                       [](CanQualType t) { return t.isCanonicalAsParam(); }));
   // Lookup or create unique function info.
+  cir::CallingConv callingConv = toCIRCallingConv(info.getCC());
   llvm::FoldingSetNodeID id;
-  CIRGenFunctionInfo::Profile(id, isInstanceMethod, info, required, returnType,
+  CIRGenFunctionInfo::Profile(id, isInstanceMethod, callingConv,
+                              info.getNoReturn(), required, returnType,
                               argTypes);
 
   llvm::FoldingSetInsertToken insertToken;
@@ -802,10 +804,9 @@ const CIRGenFunctionInfo &CIRGenTypes::arrangeCIRFunctionInfo(
     return *fi;
   }
 
-  assert(!cir::MissingFeatures::opCallCallConv());
-
   // Construction the function info. We co-allocate the ArgInfos.
-  fi = CIRGenFunctionInfo::create(info, isInstanceMethod, returnType, argTypes,
+  fi = CIRGenFunctionInfo::create(callingConv, info.getNoReturn(),
+                                  isInstanceMethod, returnType, argTypes,
                                   required);
   functionInfos.insert(fi, insertToken);
 
@@ -885,4 +886,21 @@ unsigned CIRGenTypes::getTargetAddressSpace(QualType ty) const {
   return ty->isFunctionType() && !ty.hasAddressSpace()
              ? cgm.getDataLayout().getProgramAddressSpace()
              : getASTContext().getTargetAddressSpace(ty.getAddressSpace());
+}
+
+cir::CallingConv CIRGenTypes::toCIRCallingConv(clang::CallingConv cc) const {
+  switch (cc) {
+  case CC_C:
+    return cir::CallingConv::C;
+  case CC_X86StdCall:
+    return cir::CallingConv::X86_StdCall;
+  case CC_X86FastCall:
+    return cir::CallingConv::X86_FastCall;
+  case CC_X86ThisCall:
+    return cir::CallingConv::X86_ThisCall;
+  case CC_X86VectorCall:
+    return cir::CallingConv::X86_VectorCall;
+  default:
+    return cir::CallingConv::C;
+  }
 }

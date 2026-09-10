@@ -1189,6 +1189,20 @@ static mlir::ParseResult parseCallCommon(mlir::OpAsmParser &parser,
     result.addAttribute(CIRDialect::getSideEffectAttrName(), attr);
   }
 
+  cir::CallingConv callConv = cir::CallingConv::C;
+  if (parser.parseOptionalKeyword("cc").succeeded()) {
+    llvm::SMLoc loc = parser.getCurrentLocation();
+    if (parser.parseLParen().failed())
+      return failure();
+    if (parseCIRKeyword<cir::CallingConv>(parser, callConv).failed())
+      return parser.emitError(loc) << "unknown calling convention";
+    if (parser.parseRParen().failed())
+      return failure();
+    result.addAttribute(
+        CIRDialect::getCallingConvAttrName(),
+        cir::CallingConvAttr::get(parser.getContext(), callConv));
+  }
+
   if (parser.parseOptionalAttrDict(result.attributes))
     return ::mlir::failure();
 
@@ -1287,11 +1301,18 @@ printCallCommon(mlir::Operation *op, mlir::FlatSymbolRefAttr calleeSym,
     printer << ")";
   }
 
+  if (callLikeOp.getCallingConv() != cir::CallingConv::C) {
+    printer << " cc(";
+    printer << stringifyCallingConv(callLikeOp.getCallingConv());
+    printer << ")";
+  }
+
   llvm::SmallVector<::llvm::StringRef> elidedAttrs = {
       CIRDialect::getCalleeAttrName(),
       CIRDialect::getMustTailAttrName(),
       CIRDialect::getNoThrowAttrName(),
       CIRDialect::getSideEffectAttrName(),
+      CIRDialect::getCallingConvAttrName(),
       CIRDialect::getOperandSegmentSizesAttrName(),
       llvm::StringRef("res_attrs"),
       llvm::StringRef("arg_attrs")};
@@ -1366,7 +1387,11 @@ verifyCallCommInSymbolUses(mlir::Operation *op,
                << op->getOperand(i).getType() << " for operand number " << i;
   }
 
-  assert(!cir::MissingFeatures::opCallCallConv());
+  if (callIf.getCallingConv() != fn.getCallingConv())
+    return op->emitOpError("calling convention mismatch between call (")
+           << stringifyCallingConv(callIf.getCallingConv())
+           << ") and callee ("
+           << stringifyCallingConv(fn.getCallingConv()) << ")";
 
   // Void function must not return any results.
   if (fnType.hasVoidReturn() && op->getNumResults() != 0)

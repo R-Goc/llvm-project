@@ -17,6 +17,7 @@
 
 #include "clang/AST/CanonicalType.h"
 #include "clang/CIR/ABIArgInfo.h"
+#include "clang/CIR/Dialect/IR/CIROpsEnums.h"
 #include "clang/CIR/MissingFeatures.h"
 #include "llvm/ADT/FoldingSet.h"
 #include "llvm/Support/TrailingObjects.h"
@@ -93,6 +94,8 @@ class CIRGenFunctionInfo final
   LLVM_PREFERRED_TYPE(bool)
   unsigned instanceMethod : 1;
 
+  cir::CallingConv callingConvention;
+
   RequiredArgs required;
 
   unsigned numArgs;
@@ -100,23 +103,14 @@ class CIRGenFunctionInfo final
   CanQualType *getArgTypes() { return getTrailingObjects(); }
   const CanQualType *getArgTypes() const { return getTrailingObjects(); }
 
-  CIRGenFunctionInfo() : required(RequiredArgs::All) {}
-
-  FunctionType::ExtInfo getExtInfo() const {
-    // TODO(cir): as we add this information to this type, we need to add calls
-    // here instead of explicit false/0.
-    return FunctionType::ExtInfo(
-        isNoReturn(), /*getHasRegParm=*/false, /*getRegParm=*/false,
-        /*getASTCallingConvention=*/CallingConv(0), /*isReturnsRetained=*/false,
-        /*isNoCallerSavedRegs=*/false, /*isNoCfCheck=*/false,
-        /*isCmseNSCall=*/false);
-  }
+  CIRGenFunctionInfo()
+      : callingConvention(cir::CallingConv::C), required(RequiredArgs::All) {}
 
 public:
-  static CIRGenFunctionInfo *create(FunctionType::ExtInfo info,
-                                    bool instanceMethod, CanQualType resultType,
-                                    llvm::ArrayRef<CanQualType> argTypes,
-                                    RequiredArgs required);
+  static CIRGenFunctionInfo *
+  create(cir::CallingConv callingConv, bool noReturn, bool instanceMethod,
+         CanQualType resultType, llvm::ArrayRef<CanQualType> argTypes,
+         RequiredArgs required);
 
   void operator delete(void *p) { ::operator delete(p); }
 
@@ -130,11 +124,12 @@ public:
   // This function has to be CamelCase because llvm::FoldingSet requires so.
   // NOLINTNEXTLINE(readability-identifier-naming)
   static void Profile(llvm::FoldingSetNodeID &id, bool instanceMethod,
-                      FunctionType::ExtInfo info, RequiredArgs required,
-                      CanQualType resultType,
+                      cir::CallingConv callingConv, bool noReturn,
+                      RequiredArgs required, CanQualType resultType,
                       llvm::ArrayRef<CanQualType> argTypes) {
     id.AddBoolean(instanceMethod);
-    id.AddBoolean(info.getNoReturn());
+    id.AddInteger(static_cast<unsigned>(callingConv));
+    id.AddBoolean(noReturn);
     id.AddInteger(required.getOpaqueData());
     resultType.Profile(id);
     for (const CanQualType &arg : argTypes)
@@ -146,8 +141,8 @@ public:
     // If the Profile functions get out of sync, we can end up with incorrect
     // function signatures, so we call the static Profile function here rather
     // than duplicating the logic.
-    Profile(id, isInstanceMethod(), getExtInfo(), required, getReturnType(),
-            arguments());
+    Profile(id, isInstanceMethod(), getCallingConvention(), isNoReturn(),
+            required, getReturnType(), arguments());
   }
 
   llvm::ArrayRef<CanQualType> arguments() const {
@@ -192,6 +187,7 @@ public:
 
   bool isNoReturn() const { return noReturn; }
   bool isInstanceMethod() const { return instanceMethod; }
+  cir::CallingConv getCallingConvention() const { return callingConvention; }
 };
 
 } // namespace clang::CIRGen
