@@ -1121,6 +1121,7 @@ public:
   EHScopeStack::stable_iterator prologueCleanupDepth;
 
   bool isCatchOrCleanupRequired();
+  bool currentFunctionUsesSEHTry() const;
 
   /// Takes the old cleanup stack size and emits the cleanup blocks
   /// that have been added.

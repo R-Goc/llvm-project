@@ -650,6 +650,13 @@ mlir::LogicalResult CIRGenFunction::emitCXXTryStmt(const CXXTryStmt &s) {
   return emitCXXTryStmt(s, emitter);
 }
 
+bool CIRGenFunction::currentFunctionUsesSEHTry() const {
+  const Decl *d = curGD.getDecl();
+  if (const auto *fd = dyn_cast_or_null<FunctionDecl>(d))
+    return fd->usesSEHTry();
+  return false;
+}
+
 // in classic codegen this function is mapping to `isInvokeDest` previously
 // and currently it's mapping to the conditions that performs early returns in
 // `getInvokeDestImpl`, in CIR we need the condition to know if the EH scope
@@ -664,7 +671,9 @@ bool CIRGenFunction::isCatchOrCleanupRequired() {
   if (!lo.Exceptions || lo.IgnoreExceptions) {
     if (!lo.Borland && !lo.MicrosoftExt)
       return false;
-    cgm.errorNYI("isInvokeDest: no exceptions or ignore exception");
+    if (!currentFunctionUsesSEHTry())
+      return false;
+    cgm.errorNYI("isInvokeDest: SEH try with exceptions disabled");
     return false;
   }
 

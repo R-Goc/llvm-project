@@ -166,6 +166,9 @@ struct LoweringPreparePass
   /// Materialize global ctor/dtor list
   void buildGlobalCtorDtorList();
 
+  /// Append a global to llvm.used.
+  void addUsedGlobal(cir::GlobalOp gv);
+
   cir::FuncOp buildRuntimeFunction(
       mlir::OpBuilder &builder, llvm::StringRef name, mlir::Location loc,
       cir::FuncType type,
@@ -397,10 +400,9 @@ struct LoweringPreparePass
       // Move dtorRegion body into the stub function.
       mlir::Block *stubEntryBB = dtorStub.addEntryBlock();
       mlir::Block &dtorBlock = dtorRegion.front();
-      stubEntryBB->getOperations().splice(stubEntryBB->end(),
-                                          dtorBlock.getOperations(),
-                                          dtorBlock.begin(),
-                                          std::prev(dtorBlock.end()));
+      stubEntryBB->getOperations().splice(
+          stubEntryBB->end(), dtorBlock.getOperations(), dtorBlock.begin(),
+          std::prev(dtorBlock.end()));
       cir::CIRBaseBuilderTy stubBuilder(getContext());
       stubBuilder.setInsertionPointToEnd(stubEntryBB);
       cir::ReturnOp::create(stubBuilder, global.getLoc());
@@ -412,8 +414,8 @@ struct LoweringPreparePass
       IntType intTy = builder.getSIntNTy(32);
       auto voidFnPtrTy = builder.getVoidFnPtrTy({});
       auto atexitFnTy = cir::FuncType::get({voidFnPtrTy}, intTy);
-      cir::FuncOp fnAtExit = buildRuntimeFunction(
-          moduleBuilder, "atexit", global.getLoc(), atexitFnTy);
+      cir::FuncOp fnAtExit = buildRuntimeFunction(moduleBuilder, "atexit",
+                                                  global.getLoc(), atexitFnTy);
 
       auto stubPtrTy = cir::PointerType::get(dtorStub.getFunctionType());
       mlir::Value dtorStubVal = cir::GetGlobalOp::create(
@@ -1280,8 +1282,7 @@ LoweringPreparePass::buildCXXGlobalVarDeclInitFunc(cir::GlobalOp op) {
 
     if (clang::isTemplateInstantiation(
             varDecl->getTemplateSpecializationKind()) ||
-        !clang::isUniqueGVALinkage(
-            astCtx->GetGVALinkageForVariable(varDecl)) ||
+        !clang::isUniqueGVALinkage(astCtx->GetGVALinkageForVariable(varDecl)) ||
         varDecl->hasAttr<clang::SelectAnyAttr>()) {
       linkage = cir::GlobalLinkageKind::LinkOnceODRLinkage;
     }
@@ -1757,6 +1758,13 @@ void LoweringPreparePass::lowerGlobalOp(GlobalOp op) {
     dtorRegion.getBlocks().clear();
 
     assert(!cir::MissingFeatures::astVarDeclInterface());
+    const clang::VarDecl *varDecl = nullptr;
+    if (auto astVarDecl =
+            mlir::dyn_cast_or_null<cir::ASTVarDeclAttr>(op.getAstAttr()))
+      varDecl = astVarDecl.getAst();
+    const clang::InitSegAttr *isa =
+        varDecl ? varDecl->getAttr<clang::InitSegAttr>() : nullptr;
+
     if (op.getTlsModel() && !op.getStaticLocalGuard().has_value()) {
       // There are two types of global TLS variables: 'ordered' and 'unordered'.
       // 'ordered' are the common case. A call to any of them causes all of the
@@ -1780,8 +1788,34 @@ void LoweringPreparePass::lowerGlobalOp(GlobalOp op) {
         // it later.
         globalThreadLocalInitializers.push_back(f);
       }
+    } else if (isa && isa->getSection() != ".CRT$XCC" &&
+               isa->getSection() != ".CRT$XCL") {
+      SmallString<64> ptrName = {"__cxx_init_fn_ptr"};
+      uint32_t cnt = dynamicInitializerNames[ptrName]++;
+      if (cnt)
+        ptrName += "." + std::to_string(cnt);
+
+      CIRBaseBuilderTy modBuilder(getContext());
+      auto fnPtrTy = cir::PointerType::get(f.getFunctionType());
+      modBuilder.setInsertionPointToStart(mlirModule.getBody());
+      cir::GlobalOp fnPtrOp = cir::GlobalOp::create(
+          modBuilder, op.getLoc(), ptrName, fnPtrTy, /*isConstant=*/true, {},
+          cir::GlobalLinkageKind::PrivateLinkage);
+      fnPtrOp.setSectionAttr(modBuilder.getStringAttr(isa->getSection()));
+      fnPtrOp.setInitialValueAttr(cir::GlobalViewAttr::get(
+          fnPtrTy, mlir::FlatSymbolRefAttr::get(f.getSymNameAttr())));
+      if (op.getComdat())
+        fnPtrOp.setComdat(true);
+      fnPtrOp.setPrivate();
+
+      symbolTables.getSymbolTable(mlirModule).insert(fnPtrOp);
+      addUsedGlobal(fnPtrOp);
     } else if (std::optional<uint32_t> priority = op.getInitPriority()) {
-      prioritizedDynamicInitializers[*priority].push_back(f);
+      if (astCtx && astCtx->getCXXABIKind() == clang::TargetCXXABI::Microsoft) {
+        globalCtorList.emplace_back(f.getName(), *priority);
+      } else {
+        prioritizedDynamicInitializers[*priority].push_back(f);
+      }
     } else if (f.getLinkage() == cir::GlobalLinkageKind::LinkOnceODRLinkage) {
       globalCtorList.emplace_back(f.getName(),
                                   cir::GlobalCtorAttr::getDefaultPriority());
@@ -1923,6 +1957,43 @@ void LoweringPreparePass::buildGlobalCtorDtorList() {
                                                      globalDtorList);
     mlirModule->setAttr(cir::CIRDialect::getGlobalDtorsAttrName(),
                         mlir::ArrayAttr::get(&getContext(), globalDtors));
+  }
+}
+
+void LoweringPreparePass::addUsedGlobal(cir::GlobalOp gv) {
+  CIRBaseBuilderTy builder(getContext());
+  cir::PointerType voidPtrTy = builder.getVoidPtrTy();
+  mlir::Attribute newElem = cir::GlobalViewAttr::get(
+      voidPtrTy, mlir::FlatSymbolRefAttr::get(gv.getSymNameAttr()));
+
+  auto usedOp = symbolTables.lookupSymbolIn<cir::GlobalOp>(
+      mlirModule, mlir::StringAttr::get(&getContext(), "llvm.used"));
+  SmallVector<mlir::Attribute> usedArray;
+  if (usedOp) {
+    if (auto initAttr = mlir::dyn_cast_or_null<cir::ConstArrayAttr>(
+            usedOp.getInitialValueAttr())) {
+      if (auto arr = mlir::dyn_cast<mlir::ArrayAttr>(initAttr.getElts()))
+        usedArray.append(arr.begin(), arr.end());
+    }
+    usedArray.push_back(newElem);
+    cir::ArrayType arrayTy = cir::ArrayType::get(voidPtrTy, usedArray.size());
+    cir::ConstArrayAttr initAttr = cir::ConstArrayAttr::get(
+        arrayTy, mlir::ArrayAttr::get(&getContext(), usedArray));
+    usedOp.setSymType(arrayTy);
+    usedOp.setInitialValueAttr(initAttr);
+  } else {
+    usedArray.push_back(newElem);
+    cir::ArrayType arrayTy = cir::ArrayType::get(voidPtrTy, usedArray.size());
+    cir::ConstArrayAttr initAttr = cir::ConstArrayAttr::get(
+        arrayTy, mlir::ArrayAttr::get(&getContext(), usedArray));
+    CIRBaseBuilderTy modBuilder(getContext());
+    modBuilder.setInsertionPointToEnd(mlirModule.getBody());
+    cir::GlobalOp newUsedOp = cir::GlobalOp::create(
+        modBuilder, mlirModule.getLoc(), "llvm.used", arrayTy,
+        /*isConstant=*/false, {}, cir::GlobalLinkageKind::AppendingLinkage);
+    newUsedOp.setInitialValueAttr(initAttr);
+    newUsedOp.setSectionAttr(modBuilder.getStringAttr("llvm.metadata"));
+    symbolTables.getSymbolTable(mlirModule).insert(newUsedOp);
   }
 }
 
