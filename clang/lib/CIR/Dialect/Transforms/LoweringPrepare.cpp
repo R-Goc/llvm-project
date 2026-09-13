@@ -211,6 +211,25 @@ struct LoweringPreparePass
   /// Get or create __cxa_guard_abort function.
   cir::FuncOp getGuardAbortFn(cir::PointerType guardPtrTy);
 
+  /// Get or create _Init_thread_epoch variable.
+  cir::GlobalOp getOrCreateInitThreadEpoch(CIRBaseBuilderTy &builder,
+                                          mlir::Location loc);
+
+  /// Get or create _Init_thread_header function.
+  cir::FuncOp getInitThreadHeaderFn(cir::PointerType guardPtrTy);
+
+  /// Get or create _Init_thread_footer function.
+  cir::FuncOp getInitThreadFooterFn(cir::PointerType guardPtrTy);
+
+  /// Get or create _Init_thread_abort function.
+  cir::FuncOp getInitThreadAbortFn(cir::PointerType guardPtrTy);
+
+  /// Handle Microsoft C++ ABI static local variable initialization.
+  void handleStaticLocalMicrosoft(cir::GlobalOp globalOp,
+                                  cir::LocalInitOp localInitOp,
+                                  cir::GlobalOp guard,
+                                  cir::StaticLocalInfoAttr info);
+
   /// Get or create the __init_tls function.
   cir::FuncOp getTlsInitFn();
 
@@ -246,9 +265,12 @@ struct LoweringPreparePass
     cir::CIRDataLayout dataLayout(mlirModule);
     cir::IntType guardTy;
     clang::CharUnits guardAlignment;
-    // Guard variables are 64 bits in the generic ABI and size width on ARM
-    // (i.e. 32-bit on AArch32, 64-bit on AArch64).
-    if (useInt8GuardVariable) {
+    // Guard variables are 32-bit in MSVC ABI, 64 bits in the generic ABI, and
+    // size width on ARM (i.e. 32-bit on AArch32, 64-bit on AArch64).
+    if (astCtx && astCtx->getCXXABIKind() == clang::TargetCXXABI::Microsoft) {
+      guardTy = cir::IntType::get(&getContext(), 32, /*isSigned=*/true);
+      guardAlignment = clang::CharUnits::fromQuantity(4);
+    } else if (useInt8GuardVariable) {
       guardTy = cir::IntType::get(&getContext(), 8, /*isSigned=*/true);
       guardAlignment = clang::CharUnits::One();
     } else if (useARMGuardVarABI()) {
@@ -277,20 +299,26 @@ struct LoweringPreparePass
       guard.setAlignment(guardAlignment.getAsAlign().value());
       guard.setTlsModel(globalOp.getTlsModel());
 
-      // The ABI says: "It is suggested that it be emitted in the same COMDAT
-      // group as the associated data object." In practice, this doesn't work
-      // for non-ELF and non-Wasm object formats, so only do it for ELF and
-      // Wasm.
-      bool hasComdat = globalOp.getComdat();
-      const llvm::Triple &triple = astCtx->getTargetInfo().getTriple();
-      // TODO(cir): for now, we're just setting comdat to true, but it should
-      // contain a comdat reference name here instead.
-      if (!isLocalVarDecl && hasComdat &&
-          (triple.isOSBinFormatELF() || triple.isOSBinFormatWasm())) {
-        // This should be a comdat for the variable.
-        guard.setComdat(true);
-      } else if (hasComdat && globalOp.isWeakForLinker()) {
-        guard.setComdat(true);
+      if (astCtx &&
+          astCtx->getCXXABIKind() == clang::TargetCXXABI::Microsoft) {
+        if (globalOp.isWeakForLinker())
+          guard.setComdat(true);
+      } else {
+        // The ABI says: "It is suggested that it be emitted in the same COMDAT
+        // group as the associated data object." In practice, this doesn't work
+        // for non-ELF and non-Wasm object formats, so only do it for ELF and
+        // Wasm.
+        bool hasComdat = globalOp.getComdat();
+        const llvm::Triple &triple = astCtx->getTargetInfo().getTriple();
+        // TODO(cir): for now, we're just setting comdat to true, but it should
+        // contain a comdat reference name here instead.
+        if (!isLocalVarDecl && hasComdat &&
+            (triple.isOSBinFormatELF() || triple.isOSBinFormatWasm())) {
+          // This should be a comdat for the variable.
+          guard.setComdat(true);
+        } else if (hasComdat && globalOp.isWeakForLinker()) {
+          guard.setComdat(true);
+        }
       }
 
       setStaticLocalDeclGuardAddress(globalSymName, guard);
@@ -1432,6 +1460,215 @@ cir::GlobalOp LoweringPreparePass::createGuardGlobalOp(
   return g;
 }
 
+cir::GlobalOp
+LoweringPreparePass::getOrCreateInitThreadEpoch(CIRBaseBuilderTy &builder,
+                                                mlir::Location loc) {
+  StringRef varName = "_Init_thread_epoch";
+  if (auto gv = symbolTables.lookupSymbolIn<cir::GlobalOp>(
+          mlirModule, mlir::StringAttr::get(&getContext(), varName)))
+    return gv;
+  cir::CIRBaseBuilderTy modBuilder(getContext());
+  modBuilder.setInsertionPointToStart(mlirModule.getBody());
+  auto int32Ty = modBuilder.getSIntNTy(32);
+  auto epochGV = cir::GlobalOp::create(
+      modBuilder, loc, varName, int32Ty, /*isConstant=*/false,
+      cir::LangAddressSpaceAttr::get(&getContext(),
+                                     cir::LangAddressSpace::Default),
+      cir::GlobalLinkageKind::ExternalLinkage);
+  epochGV.setAlignment(clang::CharUnits::fromQuantity(4).getAsAlign().value());
+  epochGV.setTlsModel(cir::TLSModel::GeneralDynamic);
+  mlir::SymbolTable::setSymbolVisibility(
+      epochGV, mlir::SymbolTable::Visibility::Private);
+  symbolTables.getSymbolTable(mlirModule).insert(epochGV);
+  return epochGV;
+}
+
+cir::FuncOp
+LoweringPreparePass::getInitThreadHeaderFn(cir::PointerType guardPtrTy) {
+  CIRBaseBuilderTy builder(getContext());
+  mlir::OpBuilder::InsertionGuard ipGuard{builder};
+  builder.setInsertionPointToStart(mlirModule.getBody());
+  mlir::Location loc = mlirModule.getLoc();
+  cir::VoidType voidTy = cir::VoidType::get(&getContext());
+  auto fnType = cir::FuncType::get({guardPtrTy}, voidTy);
+  return buildRuntimeFunction(builder, "_Init_thread_header", loc, fnType);
+}
+
+cir::FuncOp
+LoweringPreparePass::getInitThreadFooterFn(cir::PointerType guardPtrTy) {
+  CIRBaseBuilderTy builder(getContext());
+  mlir::OpBuilder::InsertionGuard ipGuard{builder};
+  builder.setInsertionPointToStart(mlirModule.getBody());
+  mlir::Location loc = mlirModule.getLoc();
+  cir::VoidType voidTy = cir::VoidType::get(&getContext());
+  auto fnType = cir::FuncType::get({guardPtrTy}, voidTy);
+  return buildRuntimeFunction(builder, "_Init_thread_footer", loc, fnType);
+}
+
+cir::FuncOp
+LoweringPreparePass::getInitThreadAbortFn(cir::PointerType guardPtrTy) {
+  CIRBaseBuilderTy builder(getContext());
+  mlir::OpBuilder::InsertionGuard ipGuard{builder};
+  builder.setInsertionPointToStart(mlirModule.getBody());
+  mlir::Location loc = mlirModule.getLoc();
+  cir::VoidType voidTy = cir::VoidType::get(&getContext());
+  auto fnType = cir::FuncType::get({guardPtrTy}, voidTy);
+  return buildRuntimeFunction(builder, "_Init_thread_abort", loc, fnType);
+}
+
+void LoweringPreparePass::handleStaticLocalMicrosoft(
+    cir::GlobalOp globalOp, cir::LocalInitOp localInitOp, cir::GlobalOp guard,
+    cir::StaticLocalInfoAttr info) {
+  CIRBaseBuilderTy builder(getContext());
+  builder.setInsertionPointAfter(localInitOp);
+  mlir::Location loc = localInitOp.getLoc();
+  cir::PointerType guardPtrTy = builder.getPointerTo(guard.getSymType());
+
+  auto emitBody = [&](bool isTLS) {
+    mlir::Block *insertBlock = builder.getInsertionBlock();
+    if (!localInitOp.getCtorRegion().empty()) {
+      assert(localInitOp.getCtorRegion().hasOneBlock() &&
+             "Enforced by MaxSizedRegion<1>");
+      mlir::Block &block = localInitOp.getCtorRegion().front();
+      insertBlock->getOperations().splice(
+          insertBlock->end(), block.getOperations(), block.begin(),
+          std::prev(block.end()));
+    }
+
+    if (!localInitOp.getDtorRegion().empty()) {
+      assert(localInitOp.getDtorRegion().hasOneBlock() &&
+             "Enforced by MaxSizedRegion<1>");
+      emitGlobalGuardedDtorRegion(builder, globalOp,
+                                  localInitOp.getDtorRegion(), isTLS,
+                                  *insertBlock);
+    }
+    builder.setInsertionPointToEnd(insertBlock);
+    localInitOp.getCtorRegion().getBlocks().clear();
+  };
+
+  bool isTLS = info.getTls() != cir::TLSKind::None;
+  bool threadsafe = astCtx->getLangOpts().ThreadsafeStatics;
+  bool hasPerVariableGuard = threadsafe && !isTLS;
+
+  if (hasPerVariableGuard) {
+    // Thread-Safe Static: double-checked locking protocol.
+    // 1. Fast path: load guard (relaxed) and load @_Init_thread_epoch.
+    mlir::Value guardPtr = builder.createGetGlobal(guard, /*tls=*/false);
+    cir::GlobalOp epochGV = getOrCreateInitThreadEpoch(builder, loc);
+    mlir::Value epochPtr = builder.createGetGlobal(epochGV, /*tls=*/true);
+
+    mlir::Value firstGuardLoad = builder.createAlignedLoad(loc, guardPtr, 4);
+    cast<cir::LoadOp>(firstGuardLoad.getDefiningOp())
+        .setMemOrder(cir::MemOrder::Relaxed);
+
+    mlir::Value epochLoad = builder.createAlignedLoad(loc, epochPtr, 4);
+
+    mlir::Value isUninit = builder.createCompare(
+        loc, cir::CmpOpKind::gt, firstGuardLoad, epochLoad);
+
+    auto outerIfOp = cir::IfOp::create(
+        builder, loc, isUninit, /*withElseRegion=*/false,
+        [](mlir::OpBuilder &, mlir::Location) {});
+    {
+      mlir::OpBuilder::InsertionGuard outerInsertGuard(builder);
+      builder.setInsertionPointToStart(&outerIfOp.getThenRegion().front());
+
+      // 2. Slow path: call _Init_thread_header(guardPtr).
+      cir::CallOp headerCall = builder.createCallOp(
+          loc, getInitThreadHeaderFn(guardPtrTy), mlir::ValueRange{guardPtr});
+      headerCall.setNothrowAttr(builder.getUnitAttr());
+
+      // 3. Second load on guard (relaxed).
+      mlir::Value secondGuardLoad = builder.createAlignedLoad(loc, guardPtr, 4);
+      cast<cir::LoadOp>(secondGuardLoad.getDefiningOp())
+          .setMemOrder(cir::MemOrder::Relaxed);
+
+      // 4. Compare shouldInit = (secondGuardLoad == -1).
+      auto negOne = builder.getConstantInt(
+          loc, cast<cir::IntType>(secondGuardLoad.getType()), -1);
+      auto shouldInit = builder.createCompare(
+          loc, cir::CmpOpKind::eq, secondGuardLoad, negOne);
+
+      auto innerIfOp = cir::IfOp::create(
+          builder, loc, shouldInit, /*withElseRegion=*/false,
+          [](mlir::OpBuilder &, mlir::Location) {});
+      {
+        mlir::OpBuilder::InsertionGuard innerInsertGuard(builder);
+        builder.setInsertionPointToStart(&innerIfOp.getThenRegion().front());
+
+        if (astCtx->getLangOpts().Exceptions) {
+          cir::CleanupScopeOp::create(
+              builder, loc, cir::CleanupKind::EH,
+              [&](mlir::OpBuilder &, mlir::Location bodyLoc) {
+                emitBody(/*isTLS=*/false);
+                builder.createYield(bodyLoc);
+              },
+              [&](mlir::OpBuilder &, mlir::Location cleanupLoc) {
+                cir::CallOp abortCall = builder.createCallOp(
+                    cleanupLoc, getInitThreadAbortFn(guardPtrTy),
+                    mlir::ValueRange{guardPtr});
+                abortCall.setNothrowAttr(builder.getUnitAttr());
+                builder.createYield(cleanupLoc);
+              });
+          builder.setInsertionPointToEnd(&innerIfOp.getThenRegion().front());
+        } else {
+          emitBody(/*isTLS=*/false);
+        }
+
+        cir::CallOp footerCall = builder.createCallOp(
+            loc, getInitThreadFooterFn(guardPtrTy), mlir::ValueRange{guardPtr});
+        footerCall.setNothrowAttr(builder.getUnitAttr());
+        builder.createYield(loc);
+      }
+      builder.createYield(loc);
+    }
+  } else {
+    // Thread-Local Static: single-thread bitmask test.
+    mlir::Value guardPtr = builder.createGetGlobal(guard, isTLS);
+    mlir::Value guardVal = builder.createAlignedLoad(loc, guardPtr, 4);
+    auto int32Ty = cast<cir::IntType>(guardVal.getType());
+    auto one = builder.getConstantInt(loc, int32Ty, 1);
+    auto zero = builder.getConstantInt(loc, int32Ty, 0);
+
+    mlir::Value mask = builder.createAnd(loc, guardVal, one);
+    mlir::Value needsInit =
+        builder.createCompare(loc, cir::CmpOpKind::eq, mask, zero);
+
+    auto ifOp = cir::IfOp::create(
+        builder, loc, needsInit, /*withElseRegion=*/false,
+        [](mlir::OpBuilder &, mlir::Location) {});
+    {
+      mlir::OpBuilder::InsertionGuard insertGuard(builder);
+      builder.setInsertionPointToStart(&ifOp.getThenRegion().front());
+
+      mlir::Value orVal = builder.createOr(loc, guardVal, one);
+      builder.createStore(loc, orVal, guardPtr);
+
+      if (astCtx->getLangOpts().Exceptions) {
+        cir::CleanupScopeOp::create(
+            builder, loc, cir::CleanupKind::EH,
+            [&](mlir::OpBuilder &, mlir::Location bodyLoc) {
+              emitBody(isTLS);
+              builder.createYield(bodyLoc);
+            },
+            [&](mlir::OpBuilder &, mlir::Location cleanupLoc) {
+              mlir::Value curGuard =
+                  builder.createAlignedLoad(cleanupLoc, guardPtr, 4);
+              auto notOne = builder.getConstantInt(cleanupLoc, int32Ty, ~1);
+              mlir::Value andVal =
+                  builder.createAnd(cleanupLoc, curGuard, notOne);
+              builder.createStore(cleanupLoc, andVal, guardPtr);
+              builder.createYield(cleanupLoc);
+            });
+        builder.setInsertionPointToEnd(&ifOp.getThenRegion().front());
+      } else {
+        emitBody(isTLS);
+      }
+      builder.createYield(loc);
+    }
+  }
+}
+
 void LoweringPreparePass::handleStaticLocal(cir::GlobalOp globalOp,
                                             cir::LocalInitOp localInitOp) {
   CIRBaseBuilderTy builder(getContext());
@@ -1488,6 +1725,12 @@ void LoweringPreparePass::handleStaticLocal(cir::GlobalOp globalOp,
       info.getLocal(), useInt8GuardVariable);
   if (!guard) {
     // Error was already emitted, just restore the terminator and return.
+    localInitBlock->push_back(ret);
+    return;
+  }
+
+  if (astCtx && astCtx->getCXXABIKind() == clang::TargetCXXABI::Microsoft) {
+    handleStaticLocalMicrosoft(globalOp, localInitOp, guard, info);
     localInitBlock->push_back(ret);
     return;
   }

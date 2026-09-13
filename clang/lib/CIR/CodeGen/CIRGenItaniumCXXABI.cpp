@@ -75,6 +75,8 @@ public:
                           QualType thisTy) override;
   void registerGlobalDtor(const VarDecl *vd, cir::FuncOp dtor,
                           mlir::Value addr) override;
+  void getStaticLocalGuardName(const VarDecl &varDecl,
+                               SmallVectorImpl<char> &out) override;
   void emitVirtualObjectDelete(CIRGenFunction &cgf, const CXXDeleteExpr *de,
                                Address ptr, QualType elementType,
                                const CXXDestructorDecl *dtor) override;
@@ -1772,6 +1774,12 @@ void CIRGenItaniumCXXABI::registerGlobalDtor(const VarDecl *vd,
 
   // The default behavior is to use atexit. This is handled in lowering
   // prepare. Nothing to be done for CIR here.
+}
+
+void CIRGenItaniumCXXABI::getStaticLocalGuardName(const VarDecl &varDecl,
+                                                 SmallVectorImpl<char> &out) {
+  llvm::raw_svector_ostream stream(out);
+  getMangleContext().mangleStaticGuardVariable(&varDecl, stream);
 }
 
 mlir::Value CIRGenItaniumCXXABI::getCXXDestructorImplicitParam(

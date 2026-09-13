@@ -211,6 +211,10 @@ public:
   virtual void registerGlobalDtor(const VarDecl *vd, cir::FuncOp dtor,
                                   mlir::Value addr) = 0;
 
+  /// Get the mangled name for a static local guard variable.
+  virtual void getStaticLocalGuardName(const VarDecl &varDecl,
+                                       SmallVectorImpl<char> &out) = 0;
+
   virtual void emitVirtualObjectDelete(CIRGenFunction &cgf,
                                        const CXXDeleteExpr *de, Address ptr,
                                        QualType elementType,

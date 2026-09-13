@@ -34,11 +34,8 @@ void CIRGenFunction::emitCXXGuardedInit(const VarDecl &varDecl,
   // BEFORE emitting initialization. This ensures that GetGlobalOps created
   // during initialization (e.g., in the ctor region) will see the attribute
   // and be marked with static_local accordingly.
-  llvm::SmallString<256> guardName;
-  {
-    llvm::raw_svector_ostream out(guardName);
-    cgm.getCXXABI().getMangleContext().mangleStaticGuardVariable(&varDecl, out);
-  }
+  SmallString<256> guardName;
+  cgm.getCXXABI().getStaticLocalGuardName(varDecl, guardName);
 
   // Mark the global as static local with the guard name. The emission of the
   // guard/acquire is done during LoweringPrepare.
