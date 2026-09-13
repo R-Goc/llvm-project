@@ -73,6 +73,7 @@ class CIRGenMicrosoftCXXABI : public CIRGenCXXABI {
     SmallVector<cir::GlobalOp, 2> Globals;
   };
   llvm::DenseMap<const CXXRecordDecl *, VBTableGlobals> vbTablesMap;
+  llvm::DenseMap<const DeclContext *, unsigned> threadSafeGuardNumMap;
 
   const VBTableGlobals &enumerateVBTables(const CXXRecordDecl *rd);
   cir::GlobalOp getAddrOfVBTable(const VPtrInfo &vbt, const CXXRecordDecl *rd,
@@ -341,6 +342,8 @@ public:
   void emitThrow(CIRGenFunction &cgf, const CXXThrowExpr *e) override;
   void registerGlobalDtor(const VarDecl *vd, cir::FuncOp dtor,
                           mlir::Value addr) override;
+  void getStaticLocalGuardName(const VarDecl &varDecl,
+                               SmallVectorImpl<char> &out) override;
 };
 
 } // namespace
@@ -1708,6 +1711,29 @@ void CIRGenMicrosoftCXXABI::registerGlobalDtor(const VarDecl *vd,
   if (cgm.getLangOpts().HLSL) {
     cgm.errorNYI(vd->getSourceRange(), "registerGlobalDtor: HLSL");
     return;
+  }
+}
+
+void CIRGenMicrosoftCXXABI::getStaticLocalGuardName(
+    const VarDecl &varDecl, SmallVectorImpl<char> &out) {
+  llvm::raw_svector_ostream stream(out);
+  bool threadlocalStatic = varDecl.getTLSKind() != VarDecl::TLS_None;
+  bool threadsafeStatic = cgm.getASTContext().getLangOpts().ThreadsafeStatics;
+  bool hasPerVariableGuard = threadsafeStatic && !threadlocalStatic;
+
+  if (hasPerVariableGuard) {
+    unsigned guardNum;
+    if (varDecl.isExternallyVisible()) {
+      guardNum = cgm.getASTContext().getStaticLocalNumber(&varDecl);
+      assert(guardNum > 0);
+      guardNum--;
+    } else {
+      guardNum = threadSafeGuardNumMap[varDecl.getDeclContext()]++;
+    }
+    getMangleContext().mangleThreadSafeStaticGuardVariable(&varDecl, guardNum,
+                                                           stream);
+  } else {
+    getMangleContext().mangleStaticGuardVariable(&varDecl, stream);
   }
 }
 
