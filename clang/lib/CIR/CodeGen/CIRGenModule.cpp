@@ -3294,6 +3294,13 @@ void CIRGenModule::setCIRFunctionAttributes(GlobalDecl globalDecl,
                          retAttrs, callingConv,
                          /*attrOnCallSite=*/false, isThunk);
 
+  if (info.getReturnInfo().isIndirect()) {
+    if (info.getReturnInfo().isSRetAfterThis())
+      argAttrs.insert(argAttrs.begin() + 1, mlir::NamedAttrList{});
+    else
+      argAttrs.insert(argAttrs.begin(), mlir::NamedAttrList{});
+  }
+
   for (mlir::NamedAttribute attr : pal)
     func->setAttr(attr.getName(), attr.getValue());
 
@@ -3301,7 +3308,7 @@ void CIRGenModule::setCIRFunctionAttributes(GlobalDecl globalDecl,
     mlir::function_interface_impl::setArgAttrs(func, idx_arg_pair.index(),
                                                idx_arg_pair.value());
   });
-  if (!retAttrs.empty())
+  if (func.getNumResults() > 0 && !retAttrs.empty())
     mlir::function_interface_impl::setResultAttrs(func, 0, retAttrs);
 
   // TODO(cir): Check X86_VectorCall incompatibility wiht WinARM64EC

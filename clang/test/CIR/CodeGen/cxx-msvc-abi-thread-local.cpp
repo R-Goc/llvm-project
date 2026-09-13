@@ -33,8 +33,9 @@ int g() {
 // Module-level globals and .CRT$XDU function pointer initializers (x86_64)
 // -----------------------------------------------------------------------------
 
-// CIR-DAG: cir.global constant internal @__tls_init$initializer$ = #cir.global_view<@__tls_init> : !cir.ptr<!cir.func<()>> {section = ".CRT$XDU"}
-// CIR-DAG: cir.global constant internal comdat @"??__E?$a@X@@YAXXZ$initializer$" = #cir.global_view<@"??__E?$a@X@@YAXXZ"> : !cir.ptr<!cir.func<()>> {section = ".CRT$XDU"}
+// CIR-DAG: cir.global constant internal @__tls_init$initializer$ = #cir.global_view<@__tls_init> : !cir.ptr<!cir.func<()>> section(".CRT$XDU")
+// CIR-DAG: cir.global constant internal comdat{{.*}} @"??__E?$a@X@@YAXXZ$initializer$" = #cir.global_view<@"??__E?$a@X@@YAXXZ"> : !cir.ptr<!cir.func<()>> section(".CRT$XDU")
+// CIR-DAG: cir.global appending @llvm.used = #cir.const_array<[#cir.global_view<@"??__E?$a@X@@YAXXZ$initializer$"> : !cir.ptr<!void>, #cir.global_view<@__tls_init$initializer$> : !cir.ptr<!void>]> : !cir.array<!cir.ptr<!void> x 2> section("llvm.metadata")
 // CIR-DAG: cir.func private @__tlregdtor(!cir.ptr<!cir.func<()>>) -> !s32i
 
 // -----------------------------------------------------------------------------
@@ -91,7 +92,7 @@ int g() {
 // CIR:   cir.return
 // CIR: }
 
-// CIR: cir.func no_inline dso_local @"?f@@YA?AUA@@XZ"()
+// CIR: cir.func no_inline dso_local @"?f@@YA?AUA@@XZ"(%{{.*}}: !cir.ptr<!rec_A>{{.*}})
 // CIR:   cir.get_global thread_local @"??$a@X@@3UA@@A"
 // CIR:   cir.get_global thread_local @"?b@@3UA@@A"
 // CIR:   cir.get_global thread_local @"?c@@3AEAUA@@EA"
@@ -99,8 +100,6 @@ int g() {
 // CIR: cir.func no_inline dso_local @"?g@@YAHXZ"()
 // CIR:   cir.get_global thread_local @"?e@@3HA"
 // CIR:   cir.get_global thread_local @"?ci@@3HA"
-
-// CIR: cir.global appending @llvm.used = #cir.const_array<[#cir.global_view<@"??__E?$a@X@@YAXXZ$initializer$"> : !cir.ptr<!void>, #cir.global_view<@__tls_init$initializer$> : !cir.ptr<!void>]> : !cir.array<!cir.ptr<!void> x 2> {section = "llvm.metadata"}
 
 // CIR: cir.func internal private @__tls_init() {
 // CIR:   cir.call @"??__Eb@@YAXXZ"() : () -> ()
@@ -113,8 +112,9 @@ int g() {
 // Module-level globals and .CRT$XDU function pointer initializers (i686)
 // -----------------------------------------------------------------------------
 
-// X86-DAG: cir.global constant internal @__tls_init$initializer$ = #cir.global_view<@__tls_init> : !cir.ptr<!cir.func<()>> {section = ".CRT$XDU"}
-// X86-DAG: cir.global constant internal comdat @"??__E?$a@X@@YAXXZ$initializer$" = #cir.global_view<@"??__E?$a@X@@YAXXZ"> : !cir.ptr<!cir.func<()>> {section = ".CRT$XDU"}
+// X86-DAG: cir.global constant internal @__tls_init$initializer$ = #cir.global_view<@__tls_init> : !cir.ptr<!cir.func<()>> section(".CRT$XDU")
+// X86-DAG: cir.global constant internal comdat{{.*}} @"??__E?$a@X@@YAXXZ$initializer$" = #cir.global_view<@"??__E?$a@X@@YAXXZ"> : !cir.ptr<!cir.func<()>> section(".CRT$XDU")
+// X86-DAG: cir.global appending @llvm.used = #cir.const_array<[#cir.global_view<@"??__E?$a@X@@YAXXZ$initializer$"> : !cir.ptr<!void>, #cir.global_view<@__tls_init$initializer$> : !cir.ptr<!void>]> : !cir.array<!cir.ptr<!void> x 2> section("llvm.metadata")
 // X86-DAG: cir.func private @__tlregdtor(!cir.ptr<!cir.func<()>>) -> !s32i
 
 // -----------------------------------------------------------------------------
@@ -171,7 +171,7 @@ int g() {
 // X86:   cir.return
 // X86: }
 
-// X86: cir.func no_inline dso_local @"?f@@YA?AUA@@XZ"()
+// X86: cir.func no_inline dso_local @"?f@@YA?AUA@@XZ"(%{{.*}}: !cir.ptr<!rec_A>{{.*}})
 // X86:   cir.get_global thread_local @"??$a@X@@3UA@@A"
 // X86:   cir.get_global thread_local @"?b@@3UA@@A"
 // X86:   cir.get_global thread_local @"?c@@3AAUA@@A"
@@ -179,8 +179,6 @@ int g() {
 // X86: cir.func no_inline dso_local @"?g@@YAHXZ"()
 // X86:   cir.get_global thread_local @"?e@@3HA"
 // X86:   cir.get_global thread_local @"?ci@@3HA"
-
-// X86: cir.global appending @llvm.used = #cir.const_array<[#cir.global_view<@"??__E?$a@X@@YAXXZ$initializer$"> : !cir.ptr<!void>, #cir.global_view<@__tls_init$initializer$> : !cir.ptr<!void>]> : !cir.array<!cir.ptr<!void> x 2> {section = "llvm.metadata"}
 
 // X86: cir.func internal private @__tls_init() {
 // X86:   cir.call @"??__Eb@@YAXXZ"() : () -> ()

@@ -28,7 +28,7 @@ struct C : A, B {
 
 C::C() {}
 
-// CIR-LABEL: cir.func no_inline comdat linkonce_odr dso_local @"??_EC@@W7EAAPEAXI@Z"
+// CIR-LABEL: cir.func no_inline comdat {{.*}}linkonce_odr dso_local @"??_EC@@W7EAAPEAXI@Z"
 // CIR:   %[[THIS_LOAD:[0-9]+]] = cir.load %0
 // CIR:   %[[BYTE_PTR:[0-9]+]] = cir.cast bitcast %[[THIS_LOAD]] : !cir.ptr<!rec_C> -> !cir.ptr<!u8i>
 // CIR:   %[[MINUS_8:[0-9]+]] = cir.const #cir.int<-8> : !s32i
@@ -37,7 +37,7 @@ C::C() {}
 // CIR:   cir.call @"??_EC@@UEAAPEAXI@Z"(%[[ADJ_THIS]], %{{[0-9]+}})
 // CIR:   cir.return
 
-// CIR-LABEL: cir.func no_inline comdat linkonce_odr dso_local @"?public_f@C@@W7EAAXXZ"
+// CIR-LABEL: cir.func no_inline comdat {{.*}}linkonce_odr dso_local @"?public_f@C@@W7EAAXXZ"
 // CIR:   %[[THIS_LOAD:[0-9]+]] = cir.load %0
 // CIR:   %[[BYTE_PTR:[0-9]+]] = cir.cast bitcast %[[THIS_LOAD]] : !cir.ptr<!rec_C> -> !cir.ptr<!u8i>
 // CIR:   %[[MINUS_8:[0-9]+]] = cir.const #cir.int<-8> : !s32i
@@ -63,7 +63,7 @@ struct E : D {
 
 E::E() {}
 
-// CIR-LABEL: cir.func no_inline comdat weak_odr dso_local @"?goo@E@@QEAAPEAUBaseRet@@XZ"
+// CIR-LABEL: cir.func no_inline comdat {{.*}}weak_odr dso_local @"?goo@E@@QEAAPEAUBaseRet@@XZ"
 // CIR:   %[[CALL_RES:[0-9]+]] = cir.call @"?goo@E@@UEAAPEAUDerivedRet@@XZ"(%{{[0-9]+}})
 // CIR:   %[[NULL_PTR:[0-9]+]] = cir.const #cir.ptr<null> : !cir.ptr<!rec_DerivedRet>
 // CIR:   %[[IS_NOT_NULL:[0-9]+]] = cir.cmp ne %[[CALL_RES]], %[[NULL_PTR]]
@@ -100,7 +100,7 @@ struct DerivedAgg : BaseAgg1, BaseAgg2 {
 
 DerivedAgg::DerivedAgg() {}
 
-// CIR-LABEL: cir.func no_inline comdat linkonce_odr dso_local @"?method@DerivedAgg@@W7EAAXUAgg@@@Z"
+// CIR-LABEL: cir.func no_inline comdat {{.*}}linkonce_odr dso_local @"?method@DerivedAgg@@W7EAAXUAgg@@@Z"
 // CIR:   %[[THIS_LOAD:[0-9]+]] = cir.load %0
 // CIR:   %[[BYTE_PTR:[0-9]+]] = cir.cast bitcast %[[THIS_LOAD]] : !cir.ptr<!rec_DerivedAgg> -> !cir.ptr<!u8i>
 // CIR:   %[[MINUS_8:[0-9]+]] = cir.const #cir.int<-8> : !s32i
@@ -126,13 +126,13 @@ struct DerivedSret : BaseSret1, BaseSret2 {
 
 DerivedSret::DerivedSret() {}
 
-// CIR-LABEL: cir.func no_inline comdat linkonce_odr dso_local @"?method_sret@DerivedSret@@W7EAA?AUAgg@@U2@@Z"
+// CIR-LABEL: cir.func no_inline comdat {{.*}}linkonce_odr dso_local @"?method_sret@DerivedSret@@W7EAA?AUAgg@@U2@@Z"
 // CIR:   %[[THIS_LOAD:[0-9]+]] = cir.load %0
 // CIR:   %[[BYTE_PTR:[0-9]+]] = cir.cast bitcast %[[THIS_LOAD]] : !cir.ptr<!rec_DerivedSret> -> !cir.ptr<!u8i>
 // CIR:   %[[MINUS_8:[0-9]+]] = cir.const #cir.int<-8> : !s32i
 // CIR:   %[[ADJ_PTR:[0-9]+]] = cir.ptr_stride %[[BYTE_PTR]], %[[MINUS_8]]
 // CIR:   %[[ADJ_THIS:[0-9]+]] = cir.cast bitcast %[[ADJ_PTR]] : !cir.ptr<!u8i> -> !cir.ptr<!rec_DerivedSret>
-// CIR:   cir.call @"?method_sret@DerivedSret@@UEAA?AUAgg@@U2@@Z"(%{{.*}}, %[[ADJ_THIS]], %{{.*}})
+// CIR:   cir.call @"?method_sret@DerivedSret@@UEAA?AUAgg@@U2@@Z"(%[[ADJ_THIS]], %{{.*}}, %{{.*}})
 // CIR:   cir.return
 
 // === 5. Unprototyped Must-Tail Thunks ===
@@ -153,7 +153,7 @@ struct DerivedUnproto : BaseUnproto2 {
 
 DerivedUnproto unproto_obj;
 
-// CIR-LABEL: cir.func no_inline comdat linkonce_odr dso_local @"?foo@BaseUnproto2@@W7EAAXUIncomplete@@@Z"
+// CIR-LABEL: cir.func no_inline comdat {{.*}}linkonce_odr dso_local @"?foo@BaseUnproto2@@W7EAAXUIncomplete@@@Z"
 // CIR-SAME: attributes {{{.*}}thunk{{.*}}}
 // CIR:   %[[THIS_ADJ:[0-9]+]] = cir.cast bitcast %{{[0-9]+}} : !cir.ptr<!u8i> -> !cir.ptr<!rec_BaseUnproto2>
 // CIR:   cir.call @"?foo@BaseUnproto2@@UEAAXUIncomplete@@@Z"(%[[THIS_ADJ]]) musttail
