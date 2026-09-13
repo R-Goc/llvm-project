@@ -24,7 +24,7 @@ namespace cir {
 /// Map a target triple to the ABI target that drives CallConvLowering.
 /// Returns None for targets whose calling convention is not yet implemented.
 static CallConvTarget getCallConvTarget(const llvm::Triple &triple) {
-  if (triple.getArch() == llvm::Triple::x86_64)
+  if (triple.getArch() == llvm::Triple::x86_64 && !triple.isOSWindows())
     return CallConvTarget::X86_64;
   return CallConvTarget::None;
 }

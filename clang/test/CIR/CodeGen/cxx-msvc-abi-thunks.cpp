@@ -132,7 +132,7 @@ DerivedSret::DerivedSret() {}
 // CIR:   %[[MINUS_8:[0-9]+]] = cir.const #cir.int<-8> : !s32i
 // CIR:   %[[ADJ_PTR:[0-9]+]] = cir.ptr_stride %[[BYTE_PTR]], %[[MINUS_8]]
 // CIR:   %[[ADJ_THIS:[0-9]+]] = cir.cast bitcast %[[ADJ_PTR]] : !cir.ptr<!u8i> -> !cir.ptr<!rec_DerivedSret>
-// CIR:   cir.call @"?method_sret@DerivedSret@@UEAA?AUAgg@@U2@@Z"(%{{.*}}, %[[ADJ_THIS]], %{{.*}})
+// CIR:   cir.call @"?method_sret@DerivedSret@@UEAA?AUAgg@@U2@@Z"(%[[ADJ_THIS]], %{{.*}}, %{{.*}})
 // CIR:   cir.return
 
 // === 5. Unprototyped Must-Tail Thunks ===

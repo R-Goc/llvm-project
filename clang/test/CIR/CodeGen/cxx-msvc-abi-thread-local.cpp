@@ -91,7 +91,7 @@ int g() {
 // CIR:   cir.return
 // CIR: }
 
-// CIR: cir.func no_inline dso_local @"?f@@YA?AUA@@XZ"()
+// CIR: cir.func no_inline dso_local @"?f@@YA?AUA@@XZ"(%{{.*}}: !cir.ptr<!rec_A>{{.*}})
 // CIR:   cir.get_global thread_local @"??$a@X@@3UA@@A"
 // CIR:   cir.get_global thread_local @"?b@@3UA@@A"
 // CIR:   cir.get_global thread_local @"?c@@3AEAUA@@EA"
@@ -171,7 +171,7 @@ int g() {
 // X86:   cir.return
 // X86: }
 
-// X86: cir.func no_inline dso_local @"?f@@YA?AUA@@XZ"()
+// X86: cir.func no_inline dso_local @"?f@@YA?AUA@@XZ"(%{{.*}}: !cir.ptr<!rec_A>{{.*}})
 // X86:   cir.get_global thread_local @"??$a@X@@3UA@@A"
 // X86:   cir.get_global thread_local @"?b@@3UA@@A"
 // X86:   cir.get_global thread_local @"?c@@3AAUA@@A"

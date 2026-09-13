@@ -643,10 +643,9 @@ void CIRGenFunction::startThunk(cir::FuncOp fn, GlobalDecl gd,
 
   // Start defining the function.
   cir::FuncType funcType = cgm.getTypes().getFunctionType(fnInfo);
+  curFnInfo = &fnInfo;
   startFunction(GlobalDecl(), resultType, fn, funcType, functionArgs,
                 md->getLocation(), md->getLocation());
-  // TODO(cir): Move this into startFunction.
-  curFnInfo = &fnInfo;
   assert(!cir::MissingFeatures::generateDebugInfo());
 
   // Since we didn't pass a GlobalDecl to startFunction, do this ourselves.

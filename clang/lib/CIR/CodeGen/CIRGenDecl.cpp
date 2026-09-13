@@ -336,9 +336,7 @@ void CIRGenFunction::emitAutoVarInit(
       Address addr = lv.getAddress();
       assert(addr.isValid() && "Should have an address");
       cir::AllocaOp allocaOp = addr.getUnderlyingAllocaOp();
-      assert(allocaOp && "Address should come straight out of the alloca");
-
-      if (!allocaOp.use_empty())
+      if (allocaOp && !allocaOp.use_empty())
         allocaOp.setInitAttr(mlir::UnitAttr::get(&getMLIRContext()));
     }
 

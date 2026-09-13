@@ -831,6 +831,22 @@ const CIRGenFunctionInfo &CIRGenTypes::arrangeCIRFunctionInfo(
   cir::CallingConv cirCC = clangCallConvToCIRCallConv(info.getCC());
   fi = CIRGenFunctionInfo::create(cirCC, info, isInstanceMethod, returnType,
                                   argTypes, required);
+
+  if (!theCXXABI.classifyReturnType(*fi)) {
+    if (astContext.getTargetInfo().getCXXABI().isMicrosoft()) {
+      if (fi->getReturnType()->isStructureOrClassType()) {
+        uint64_t size =
+            astContext.getTypeSizeInChars(fi->getReturnType()).getQuantity();
+        if (size == 1 || size == 2 || size == 4 || size == 8) {
+          // Direct return
+        } else {
+          CharUnits align = astContext.getTypeAlignInChars(fi->getReturnType());
+          fi->setReturnInfo(cir::ABIArgInfo::getIndirect(align));
+        }
+      }
+    }
+  }
+
   functionInfos.insert(fi, insertToken);
 
   return *fi;

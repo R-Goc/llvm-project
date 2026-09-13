@@ -25,6 +25,8 @@
 
 namespace clang::CIRGen {
 
+class CIRGenFunctionInfo;
+
 /// Implements C++ ABI-specific code generation functions.
 class CIRGenCXXABI {
 protected:
@@ -41,6 +43,10 @@ public:
   virtual ~CIRGenCXXABI();
 
   void setCXXABIThisValue(CIRGenFunction &cgf, mlir::Value thisPtr);
+
+  virtual bool classifyReturnType(CIRGenFunctionInfo &fi) const {
+    return false;
+  }
 
   /// Emit the code to initialize hidden members required to handle virtual
   /// inheritance, if needed by the ABI.

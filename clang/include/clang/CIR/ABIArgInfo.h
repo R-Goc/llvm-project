@@ -16,8 +16,9 @@
 #ifndef CLANG_CIR_ABIARGINFO_H
 #define CLANG_CIR_ABIARGINFO_H
 
-#include "mlir/IR/Types.h"
+#include "clang/AST/CharUnits.h"
 #include "clang/CIR/MissingFeatures.h"
+#include "mlir/IR/Types.h"
 
 namespace cir {
 
@@ -32,6 +33,9 @@ public:
     /// "PaddingType" is not zero.
     Direct,
 
+    /// Pass the argument indirectly via a pointer.
+    Indirect,
+
     /// Ignore the argument (treat as void). Useful for void and empty
     /// structs.
     Ignore,
@@ -45,13 +49,22 @@ private:
     unsigned offset;
     unsigned align;
   };
+  struct IndirectAttrInfo {
+    unsigned align;
+    unsigned addrSpace;
+  };
   union {
     DirectAttrInfo directAttr;
+    IndirectAttrInfo indirectAttr;
   };
   Kind theKind;
+  bool sretAfterThis : 1;
+  bool indirectByVal : 1;
 
 public:
-  ABIArgInfo(Kind k = Direct) : directAttr{0, 0}, theKind(k) {}
+  ABIArgInfo(Kind k = Direct)
+      : directAttr{0, 0}, theKind(k), sretAfterThis(false),
+        indirectByVal(false) {}
 
   static ABIArgInfo getDirect(mlir::Type ty = nullptr) {
     ABIArgInfo info(Direct);
@@ -60,14 +73,54 @@ public:
     return info;
   }
 
+  static ABIArgInfo getIndirect(clang::CharUnits align, unsigned addrSpace = 0,
+                                bool byVal = false) {
+    ABIArgInfo ret(Indirect);
+    ret.setIndirectAlign(align);
+    ret.setIndirectAddrSpace(addrSpace);
+    ret.setIndirectByVal(byVal);
+    ret.setSRetAfterThis(false);
+    return ret;
+  }
+
   static ABIArgInfo getIgnore() { return ABIArgInfo(Ignore); }
 
   Kind getKind() const { return theKind; }
   bool isDirect() const { return theKind == Direct; }
   bool isIgnore() const { return theKind == Ignore; }
-  bool isIndirect() const {
-    assert(!cir::MissingFeatures::abiArgInfo());
-    return false;
+  bool isIndirect() const { return theKind == Indirect; }
+
+  clang::CharUnits getIndirectAlign() const {
+    assert(isIndirect() && "Invalid accessor!");
+    return clang::CharUnits::fromQuantity(indirectAttr.align);
+  }
+  void setIndirectAlign(clang::CharUnits align) {
+    assert(isIndirect() && "Invalid accessor!");
+    indirectAttr.align = align.getQuantity();
+  }
+  unsigned getIndirectAddrSpace() const {
+    assert(isIndirect() && "Invalid accessor!");
+    return indirectAttr.addrSpace;
+  }
+  void setIndirectAddrSpace(unsigned as) {
+    assert(isIndirect() && "Invalid accessor!");
+    indirectAttr.addrSpace = as;
+  }
+  bool getIndirectByVal() const {
+    assert(isIndirect() && "Invalid accessor!");
+    return indirectByVal;
+  }
+  void setIndirectByVal(bool v) {
+    assert(isIndirect() && "Invalid accessor!");
+    indirectByVal = v;
+  }
+  bool isSRetAfterThis() const {
+    assert(isIndirect() && "Invalid accessor!");
+    return sretAfterThis;
+  }
+  void setSRetAfterThis(bool v) {
+    assert(isIndirect() && "Invalid accessor!");
+    sretAfterThis = v;
   }
   bool isExtend() const {
     assert(!cir::MissingFeatures::abiArgInfo());

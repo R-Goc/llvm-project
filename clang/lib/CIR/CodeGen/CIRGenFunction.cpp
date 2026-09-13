@@ -479,10 +479,21 @@ void CIRGenFunction::emitFunctionProlog(const FunctionArgList &args,
     cgm.errorNYI(bodyBeginLoc, "naked function decl");
   }
 
+  bool hasIndirectRet = curFnInfo && curFnInfo->getReturnInfo().isIndirect();
+  bool sretAfterThis =
+      hasIndirectRet && curFnInfo->getReturnInfo().isSRetAfterThis();
+
   // Declare all the function arguments in the symbol table.
-  for (const auto nameValue : llvm::zip(args, entryBB->getArguments())) {
-    const VarDecl *paramVar = std::get<0>(nameValue);
-    mlir::Value paramVal = std::get<1>(nameValue);
+  for (size_t i = 0; i < args.size(); ++i) {
+    const VarDecl *paramVar = args[i];
+    size_t bbArgIndex = i;
+    if (hasIndirectRet) {
+      if (sretAfterThis)
+        bbArgIndex = (i == 0) ? 0 : (i + 1);
+      else
+        bbArgIndex = i + 1;
+    }
+    mlir::Value paramVal = entryBB->getArgument(bbArgIndex);
     CharUnits alignment = getContext().getDeclAlign(paramVar);
     mlir::Location paramLoc = getLoc(paramVar->getSourceRange());
     paramVal.setLoc(paramLoc);
@@ -534,6 +545,9 @@ void CIRGenFunction::startFunction(GlobalDecl gd, QualType returnType,
   const auto *fd = dyn_cast_or_null<FunctionDecl>(d);
   curFuncDecl = (d ? d->getNonClosureContext() : nullptr);
 
+  if (!curFnInfo && gd.getDecl())
+    curFnInfo = &cgm.getTypes().arrangeGlobalDeclaration(gd);
+
   // This is an artifact of the legacy handling of constrained floating-point
   // modes. The rounding mode and exception behavior tracked in
   // clang::LangOptions don't correspond directly to the representation we
@@ -569,9 +583,14 @@ void CIRGenFunction::startFunction(GlobalDecl gd, QualType returnType,
 
   emitFunctionProlog(args, entryBB, fd, bodyBeginLoc);
 
-  // When the current function is not void, create an address to store the
-  // result value.
-  if (!returnType->isVoidType()) {
+  // When the current function has an indirect return, initialize returnValue
+  // directly from the caller's sret buffer without creating a local __retval alloca.
+  if (curFnInfo && curFnInfo->getReturnInfo().isIndirect()) {
+    unsigned sretIndex = curFnInfo->getReturnInfo().isSRetAfterThis() ? 1 : 0;
+    mlir::Value sretVal = fn.getArgument(sretIndex);
+    returnValue =
+        Address(sretVal, curFnInfo->getReturnInfo().getIndirectAlign());
+  } else if (!returnType->isVoidType()) {
     // Determine the function body end location.
     // If fd is null or has no body, use loc as fallback.
     SourceLocation bodyEndLoc = loc;
@@ -717,6 +736,9 @@ cir::FuncOp CIRGenFunction::generateCode(clang::GlobalDecl gd, cir::FuncOp fn,
                                          cir::FuncType funcType) {
   const auto *funcDecl = cast<FunctionDecl>(gd.getDecl());
   curGD = gd;
+  const CIRGenFunctionInfo &fnInfo =
+      cgm.getTypes().arrangeGlobalDeclaration(gd);
+  curFnInfo = &fnInfo;
 
   if (funcDecl->isInlineBuiltinDeclaration()) {
     // When generating code for a builtin with an inline declaration, use a

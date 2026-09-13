@@ -1382,10 +1382,14 @@ void CIRGenFunction::emitReturnOfRValue(mlir::Location loc, RValue rv,
   // directly.
   // TODO(cir): Eliminate this redundant load and the store above when we can.
   // Load the value from `__retval` and return it via the `cir.return` op.
-  cir::AllocaOp retAlloca =
-      mlir::cast<cir::AllocaOp>(fnRetAlloca->getDefiningOp());
-  auto value = cir::LoadOp::create(builder, loc, retAlloca.getAllocaType(),
-                                   *fnRetAlloca);
+  if (fnRetAlloca) {
+    cir::AllocaOp retAlloca =
+        mlir::cast<cir::AllocaOp>(fnRetAlloca->getDefiningOp());
+    auto value = cir::LoadOp::create(builder, loc, retAlloca.getAllocaType(),
+                                     *fnRetAlloca);
 
-  cir::ReturnOp::create(builder, loc, {value});
+    cir::ReturnOp::create(builder, loc, {value});
+  } else {
+    cir::ReturnOp::create(builder, loc);
+  }
 }
