@@ -76,24 +76,20 @@ void CIRGenModule::setGlobalTlsReferences(const VarDecl &vd,
   llvm::SmallString<256> initFuncName;
   llvm::SmallString<256> guardName;
 
-  if (getCXXABI().getMangleContext().getKind() == MangleContext::MK_Itanium) {
-    llvm::raw_svector_ostream wrapperOut(wrapperFuncName);
-    llvm::raw_svector_ostream initOut(initFuncName);
-    llvm::raw_svector_ostream guardStream(guardName);
-
-    auto &mc = cast<ItaniumMangleContext>(getCXXABI().getMangleContext());
-    mc.mangleItaniumThreadLocalWrapper(&vd, wrapperOut);
-    mc.mangleItaniumThreadLocalInit(&vd, initOut);
-    if (globalOp.hasWeakLinkage() || globalOp.hasLinkOnceLinkage() ||
-        isTemplateInstantiation(vd.getTemplateSpecializationKind())) {
-      getCXXABI().getMangleContext().mangleStaticGuardVariable(&vd,
-                                                               guardStream);
-    }
-
-  } else {
-    errorNYI(vd.getSourceRange(),
-             "setGlobalTlsReferences: non-itanium mangler");
+  if (getCXXABI().getMangleContext().getKind() != MangleContext::MK_Itanium)
     return;
+
+  llvm::raw_svector_ostream wrapperOut(wrapperFuncName);
+  llvm::raw_svector_ostream initOut(initFuncName);
+  llvm::raw_svector_ostream guardStream(guardName);
+
+  auto &mc = cast<ItaniumMangleContext>(getCXXABI().getMangleContext());
+  mc.mangleItaniumThreadLocalWrapper(&vd, wrapperOut);
+  mc.mangleItaniumThreadLocalInit(&vd, initOut);
+  if (globalOp.hasWeakLinkage() || globalOp.hasLinkOnceLinkage() ||
+      isTemplateInstantiation(vd.getTemplateSpecializationKind())) {
+    getCXXABI().getMangleContext().mangleStaticGuardVariable(&vd,
+                                                             guardStream);
   }
   globalOp.setTlsRefsAttr(cir::ThreadLocalGlobalWrapperInitAttr::get(
       &getMLIRContext(), wrapperFuncName, initFuncName, guardName));

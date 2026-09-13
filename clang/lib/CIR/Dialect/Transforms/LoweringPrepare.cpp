@@ -337,6 +337,7 @@ struct LoweringPreparePass
   std::map<unsigned, llvm::SmallVector<cir::FuncOp, 4>>
       prioritizedDynamicInitializers;
   llvm::SmallVector<cir::FuncOp> globalThreadLocalInitializers;
+  SmallVector<cir::FuncOp> msvcThreadLocalInitializers;
   llvm::StringMap<cir::FuncOp> threadLocalWrappers;
   llvm::StringMap<cir::FuncOp> threadLocalInitAliases;
 
@@ -407,14 +408,15 @@ struct LoweringPreparePass
       stubBuilder.setInsertionPointToEnd(stubEntryBB);
       cir::ReturnOp::create(stubBuilder, global.getLoc());
 
-      // Register the stub function with atexit in entryBB.
+      // Register the stub function with atexit or __tlregdtor in entryBB.
       builder.setInsertionPointToEnd(&entryBB);
       cir::CIRBaseBuilderTy moduleBuilder(getContext());
       moduleBuilder.setInsertionPointToStart(mlirModule.getBody());
       IntType intTy = builder.getSIntNTy(32);
       auto voidFnPtrTy = builder.getVoidFnPtrTy({});
       auto atexitFnTy = cir::FuncType::get({voidFnPtrTy}, intTy);
-      cir::FuncOp fnAtExit = buildRuntimeFunction(moduleBuilder, "atexit",
+      StringRef regFnName = tls ? "__tlregdtor" : "atexit";
+      cir::FuncOp fnAtExit = buildRuntimeFunction(moduleBuilder, regFnName,
                                                   global.getLoc(), atexitFnTy);
 
       auto stubPtrTy = cir::PointerType::get(dtorStub.getFunctionType());
@@ -1766,27 +1768,51 @@ void LoweringPreparePass::lowerGlobalOp(GlobalOp op) {
         varDecl ? varDecl->getAttr<clang::InitSegAttr>() : nullptr;
 
     if (op.getTlsModel() && !op.getStaticLocalGuard().has_value()) {
-      // There are two types of global TLS variables: 'ordered' and 'unordered'.
-      // 'ordered' are the common case. A call to any of them causes all of the
-      // initializers for all other 'ordered' ones to be called, via a
-      // `__tls_init` function. So the 'init alias' that gets called in the
-      // wrapper for these goes directly to `__tls_init`.
+      if (astCtx && astCtx->getCXXABIKind() == clang::TargetCXXABI::Microsoft) {
+        if (f.getLinkage() == cir::GlobalLinkageKind::LinkOnceODRLinkage ||
+            op.getComdat()) {
+          CIRBaseBuilderTy modBuilder(getContext());
+          auto fnPtrTy = cir::PointerType::get(f.getFunctionType());
+          modBuilder.setInsertionPointToStart(mlirModule.getBody());
+          SmallString<256> ptrName;
+          llvm::raw_svector_ostream out(ptrName);
+          out << f.getName() << "$initializer$";
+          cir::GlobalOp fnPtrOp = cir::GlobalOp::create(
+              modBuilder, op.getLoc(), ptrName, fnPtrTy, /*isConstant=*/true,
+              {}, cir::GlobalLinkageKind::InternalLinkage);
+          fnPtrOp.setSectionAttr(modBuilder.getStringAttr(".CRT$XDU"));
+          fnPtrOp.setInitialValueAttr(cir::GlobalViewAttr::get(
+              fnPtrTy, mlir::FlatSymbolRefAttr::get(f.getSymNameAttr())));
+          fnPtrOp.setComdat(true);
 
-      // 'Unordered' values are the case for variable templates. In this case,
-      // their init alias goes directly to their init function. The FE generates
-      // a guard variable for them (since they cannot use the global guard), so
-      // we differentiate them that way.
-
-      if (op.getTlsRefs()->getGuardName()) {
-        // Unordered: the alias is the function we just generated.
-        initAlias = defineGlobalThreadLocalInitAlias(op, f);
+          symbolTables.getSymbolTable(mlirModule).insert(fnPtrOp);
+          addUsedGlobal(fnPtrOp);
+        } else {
+          msvcThreadLocalInitializers.push_back(f);
+        }
       } else {
-        // Ordered: Get the __tls_init, and make the alias to that.
-        initAlias = defineGlobalThreadLocalInitAlias(op, getTlsInitFn());
-        // Ordered inits also need to get called from the __tls_init function,
-        // so we add the init function to the list, so that we can add them to
-        // it later.
-        globalThreadLocalInitializers.push_back(f);
+        // There are two types of global TLS variables: 'ordered' and 'unordered'.
+        // 'ordered' are the common case. A call to any of them causes all of the
+        // initializers for all other 'ordered' ones to be called, via a
+        // `__tls_init` function. So the 'init alias' that gets called in the
+        // wrapper for these goes directly to `__tls_init`.
+
+        // 'Unordered' values are the case for variable templates. In this case,
+        // their init alias goes directly to their init function. The FE generates
+        // a guard variable for them (since they cannot use the global guard), so
+        // we differentiate them that way.
+
+        if (op.getTlsRefs()->getGuardName()) {
+          // Unordered: the alias is the function we just generated.
+          initAlias = defineGlobalThreadLocalInitAlias(op, f);
+        } else {
+          // Ordered: Get the __tls_init, and make the alias to that.
+          initAlias = defineGlobalThreadLocalInitAlias(op, getTlsInitFn());
+          // Ordered inits also need to get called from the __tls_init function,
+          // so we add the init function to the list, so that we can add them to
+          // it later.
+          globalThreadLocalInitializers.push_back(f);
+        }
       }
     } else if (isa && isa->getSection() != ".CRT$XCC" &&
                isa->getSection() != ".CRT$XCL") {
@@ -2050,6 +2076,42 @@ cir::IfOp LoweringPreparePass::buildGlobalTlsGuardCheck(
 }
 
 void LoweringPreparePass::buildCXXGlobalTlsFunc() {
+  if (astCtx && astCtx->getCXXABIKind() == clang::TargetCXXABI::Microsoft) {
+    if (msvcThreadLocalInitializers.empty())
+      return;
+
+    CIRBaseBuilderTy modBuilder(getContext());
+    modBuilder.setInsertionPointToEnd(&mlirModule.getBodyRegion().back());
+    mlir::Location loc = mlirModule.getLoc();
+    auto voidTy = modBuilder.getVoidTy();
+    auto fnTy = cir::FuncType::get({}, voidTy);
+
+    cir::FuncOp tlsInit = buildRuntimeFunction(
+        modBuilder, "__tls_init", loc, fnTy,
+        cir::GlobalLinkageKind::InternalLinkage);
+    symbolTables.getSymbolTable(mlirModule).insert(tlsInit);
+
+    mlir::Block *entryBB = tlsInit.addEntryBlock();
+    modBuilder.setInsertionPointToStart(entryBB);
+    for (cir::FuncOp initFunc : msvcThreadLocalInitializers)
+      modBuilder.createCallOp(initFunc.getLoc(), initFunc, {});
+    cir::ReturnOp::create(modBuilder, loc);
+
+    // Create function pointer global in .CRT$XDU pointing to @__tls_init
+    auto fnPtrTy = cir::PointerType::get(fnTy);
+    modBuilder.setInsertionPointToStart(mlirModule.getBody());
+    cir::GlobalOp fnPtrOp = cir::GlobalOp::create(
+        modBuilder, loc, "__tls_init$initializer$", fnPtrTy,
+        /*isConstant=*/true, {}, cir::GlobalLinkageKind::InternalLinkage);
+    fnPtrOp.setSectionAttr(modBuilder.getStringAttr(".CRT$XDU"));
+    fnPtrOp.setInitialValueAttr(cir::GlobalViewAttr::get(
+        fnPtrTy, mlir::FlatSymbolRefAttr::get(tlsInit.getSymNameAttr())));
+
+    symbolTables.getSymbolTable(mlirModule).insert(fnPtrOp);
+    addUsedGlobal(fnPtrOp);
+    return;
+  }
+
   if (globalThreadLocalInitializers.empty())
     return;
 

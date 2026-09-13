@@ -176,9 +176,12 @@ static void emitDeclDestroy(CIRGenFunction &cgf, const VarDecl *vd,
         mlir::cast<cir::PointerType>(thisAddr.getType()).getAddrSpace());
     if (realPtrTy != thisAddr.getType())
       thisAddr = builder.createBitcast(thisAddr.getLoc(), thisAddr, realPtrTy);
-    builder.createCallOp(cgf.getLoc(vd->getSourceRange()),
-                         mlir::FlatSymbolRefAttr::get(fnOp.getSymNameAttr()),
-                         mlir::ValueRange{thisAddr});
+    auto call = builder.createCallOp(
+        cgf.getLoc(vd->getSourceRange()),
+        mlir::FlatSymbolRefAttr::get(fnOp.getSymNameAttr()),
+        mlir::ValueRange{thisAddr});
+    if (fnOp.getCallingConv() != cir::CallingConv::C)
+      call.setCallingConv(fnOp.getCallingConv());
     assert(fnOp && "expected cir.func");
     // TODO(cir): This doesn't do anything but check for unhandled conditions.
     // What it is meant to do should really be happening in LoweringPrepare.
