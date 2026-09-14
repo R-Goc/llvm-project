@@ -35,8 +35,8 @@
 #include "clang/Basic/TargetBuiltins.h"
 #include "clang/CIR/Dialect/IR/CIRDialect.h"
 #include "clang/CIR/MissingFeatures.h"
-#include "clang/CIR/TypeEvaluationKind.h"
 #include "clang/CodeGenUtils/StmtUtils.h"
+#include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/ScopedHashTable.h"
 #include "llvm/IR/Instructions.h"
 #include "llvm/IR/Intrinsics.h"
@@ -1266,6 +1266,9 @@ public:
     return ehSpecTryOp &&
            mlir::isa<cir::CatchAllAttr>(ehSpecTryOp.getHandlerTypes()[0]);
   }
+
+  llvm::DenseMap<const ParmVarDecl *, EHScopeStack::stable_iterator>
+      calleeDestructedParamCleanups;
 
   bool isCatchOrCleanupRequired();
   bool currentFunctionUsesSEHTry() const;
