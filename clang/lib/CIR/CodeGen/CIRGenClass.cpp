@@ -1083,9 +1083,15 @@ struct CallDtorDeleteConditional final : EHScopeStack::Cleanup {
                 builder, thenLoc, isGlobalDelete, /*withElseRegion=*/true,
                 /*thenBuilder=*/
                 [&](mlir::OpBuilder &b2, mlir::Location gloc) {
+                  cir::FuncOp wrapper =
+                      cgf.cgm.getOrCreateMSVCGlobalDeleteWrapper(globOD);
+                  if (dtor->hasAttr<DLLExportAttr>())
+                    cgf.cgm.noteDirectGlobalDelete();
                   cgf.emitDeleteCall(
                       globOD, loadThisForDtorDelete(cgf, dtor),
-                      cgf.getContext().getCanonicalTagType(classDecl));
+                      cgf.getContext().getCanonicalTagType(classDecl),
+                      /*numElements=*/nullptr, CharUnits::Zero(),
+                      /*calleeOverride=*/wrapper);
                   builder.createYield(gloc);
                 },
                 /*elseBuilder=*/

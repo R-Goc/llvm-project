@@ -2069,7 +2069,8 @@ public:
 
   void emitDeleteCall(const FunctionDecl *deleteFD, mlir::Value ptr,
                       QualType deleteTy, mlir::Value numElements = nullptr,
-                      CharUnits cookieSize = CharUnits::Zero());
+                      CharUnits cookieSize = CharUnits::Zero(),
+                      cir::FuncOp calleeOverride = nullptr);
 
   mlir::LogicalResult emitDoStmt(const clang::DoStmt &s);
 

@@ -823,9 +823,11 @@ static mlir::Value emitCXXNewAllocSize(CIRGenFunction &cgf, const CXXNewExpr *e,
 static RValue emitNewDeleteCall(CIRGenFunction &cgf,
                                 const FunctionDecl *calleeDecl,
                                 const FunctionProtoType *calleeType,
-                                const CallArgList &args) {
+                                const CallArgList &args,
+                                cir::FuncOp calleeOverride = nullptr) {
   cir::CIRCallOpInterface callOrTryCall;
-  cir::FuncOp calleePtr = cgf.cgm.getAddrOfFunction(calleeDecl);
+  cir::FuncOp calleePtr =
+      calleeOverride ? calleeOverride : cgf.cgm.getAddrOfFunction(calleeDecl);
   CIRGenCallee callee =
       CIRGenCallee::forDirect(calleePtr, GlobalDecl(calleeDecl));
   RValue rv = cgf.emitCall(
@@ -1546,6 +1548,17 @@ static void emitObjectDelete(CIRGenFunction &cgf, const CXXDeleteExpr *de,
 }
 
 void CIRGenFunction::emitCXXDeleteExpr(const CXXDeleteExpr *e) {
+  if (e->isGlobalDelete() && cgm.getTarget().getCXXABI().isMicrosoft()) {
+    const CXXRecordDecl *rd = e->getDestroyedType()->getAsCXXRecordDecl();
+    if (rd && rd->hasDefinition() && !rd->hasTrivialDestructor()) {
+      cgm.noteDirectGlobalDelete();
+      const FunctionDecl *od = e->getOperatorDelete();
+      assert(!isa<CXXMethodDecl>(od) &&
+             "global ::delete should resolve to a namespace-scope operator delete");
+      cgm.getOrCreateMSVCGlobalDeleteWrapper(od);
+    }
+  }
+
   const Expr *arg = e->getArgument();
   Address ptr = emitPointerWithAlignment(arg);
 
@@ -1902,7 +1915,8 @@ mlir::Value CIRGenFunction::emitCXXNewExpr(const CXXNewExpr *e) {
 void CIRGenFunction::emitDeleteCall(const FunctionDecl *deleteFD,
                                     mlir::Value ptr, QualType deleteTy,
                                     mlir::Value numElements,
-                                    CharUnits cookieSize) {
+                                    CharUnits cookieSize,
+                                    cir::FuncOp calleeOverride) {
   assert(!cir::MissingFeatures::deleteArray());
 
   const auto *deleteFTy = deleteFD->getType()->castAs<FunctionProtoType>();
@@ -1975,7 +1989,7 @@ void CIRGenFunction::emitDeleteCall(const FunctionDecl *deleteFD,
          "unknown parameter to usual delete function");
 
   // Emit the call to delete.
-  emitNewDeleteCall(*this, deleteFD, deleteFTy, deleteArgs);
+  emitNewDeleteCall(*this, deleteFD, deleteFTy, deleteArgs, calleeOverride);
 }
 
 static mlir::Value emitDynamicCastToNull(CIRGenFunction &cgf,

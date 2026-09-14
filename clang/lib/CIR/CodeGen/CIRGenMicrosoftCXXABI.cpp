@@ -852,10 +852,15 @@ void CIRGenMicrosoftCXXABI::emitConditionalArrayDtorCall(
                       builder, l2, isGlobalDelete, /*withElseRegion=*/true,
                       /*thenBuilder=*/
                       [&](mlir::OpBuilder &b3, mlir::Location gloc) {
+                        cir::FuncOp wrapper =
+                            cgm.getOrCreateMSVCGlobalDeleteWrapper(globArrOD);
+                        if (dd->hasAttr<DLLExportAttr>())
+                          cgm.noteDirectGlobalDelete();
                         cgf.emitDeleteCall(
                             globArrOD, allocatedPtr,
                             cgf.getContext().getCanonicalTagType(classDecl),
-                            numElements, cookieSize);
+                            numElements, cookieSize,
+                            /*calleeOverride=*/wrapper);
                         builder.createYield(gloc);
                       },
                       /*elseBuilder=*/
