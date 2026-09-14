@@ -702,6 +702,13 @@ mlir::LogicalResult CIRDeleteArrayOpABILowering::matchAndRewrite(
                     bb.getInsertionBlock()->addArgument(eltPtrTy, ll);
                 auto dtorCall = cir::CallOp::create(
                     bb, ll, dtorFn, cir::VoidType(), mlir::ValueRange{arg});
+                if (auto mod = op->getParentOfType<mlir::ModuleOp>()) {
+                  if (auto dtorFunc =
+                          mod.lookupSymbol<cir::FuncOp>(dtorFn.getValue())) {
+                    if (dtorFunc.getCallingConv() != cir::CallingConv::C)
+                      dtorCall.setCallingConv(dtorFunc.getCallingConv());
+                  }
+                }
                 if (!op.getDtorMayThrow())
                   dtorCall.setNothrowAttr(bb.getUnitAttr());
                 cir::YieldOp::create(bb, ll);
@@ -735,6 +742,13 @@ mlir::LogicalResult CIRDeleteArrayOpABILowering::matchAndRewrite(
 
         auto deleteCall =
             cir::CallOp::create(b, l, deleteFn, cir::VoidType(), callArgs);
+        if (auto mod = op->getParentOfType<mlir::ModuleOp>()) {
+          if (auto deleteFunc =
+                  mod.lookupSymbol<cir::FuncOp>(deleteFn.getValue())) {
+            if (deleteFunc.getCallingConv() != cir::CallingConv::C)
+              deleteCall.setCallingConv(deleteFunc.getCallingConv());
+          }
+        }
         // operator delete[] is implicitly nothrow per [basic.stc.dynamic],
         // matching classic CodeGen's `nounwind` attribute on the call.
         deleteCall.setNothrowAttr(b.getUnitAttr());

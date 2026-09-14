@@ -220,7 +220,6 @@ struct MissingFeatures {
   static bool noaliasOnByvalAttr() { return false; }
   static bool deferredCXXGlobalInit() { return false; }
   static bool deleteArray() { return false; }
-  static bool devirtualizeDestructor() { return false; }
   static bool dtorCleanups() { return false; }
   static bool ehCleanupScope() { return false; }
   static bool emitCheckedInBoundsGEP() { return false; }
