@@ -1499,6 +1499,30 @@ static void emitDestroyingObjectDelete(CIRGenFunction &cgf,
   cgf.emitDeleteCall(de->getOperatorDelete(), ptr.getPointer(), elementType);
 }
 
+static const CXXRecordDecl *getCXXRecord(const Expr *e) {
+  Expr *expr = const_cast<Expr *>(e);
+  QualType ty = expr->getType();
+  if (const auto *pt = ty->getAs<PointerType>())
+    ty = pt->getPointeeType();
+  return ty->getAsCXXRecordDecl();
+}
+
+static const CXXDestructorDecl *
+tryDevirtualizeDtorCall(const CXXDeleteExpr *e, const CXXDestructorDecl *dtor,
+                        const LangOptions &lo) {
+  assert(dtor && dtor->isVirtual() && "virtual dtor is expected");
+  const Expr *dBase = e->getArgument();
+  if (auto *maybeDevirtualizedDtor = dyn_cast_or_null<CXXDestructorDecl>(
+          dtor->getDevirtualizedMethod(dBase, lo.AppleKext))) {
+    const CXXRecordDecl *devirtualizedClass =
+        maybeDevirtualizedDtor->getParent();
+    if (declaresSameEntity(getCXXRecord(dBase), devirtualizedClass)) {
+      return maybeDevirtualizedDtor;
+    }
+  }
+  return nullptr;
+}
+
 /// Emit the code for deleting a single object.
 static void emitObjectDelete(CIRGenFunction &cgf, const CXXDeleteExpr *de,
                              Address ptr, QualType elementType) {
@@ -1520,10 +1544,14 @@ static void emitObjectDelete(CIRGenFunction &cgf, const CXXDeleteExpr *de,
       dtor = rd->getDestructor();
 
       if (dtor->isVirtual()) {
-        assert(!cir::MissingFeatures::devirtualizeDestructor());
-        cgf.cgm.getCXXABI().emitVirtualObjectDelete(cgf, de, ptr, elementType,
-                                                    dtor);
-        return;
+        if (const auto *devirtualizedDtor =
+                tryDevirtualizeDtorCall(de, dtor, cgf.getLangOpts())) {
+          dtor = devirtualizedDtor;
+        } else {
+          cgf.cgm.getCXXABI().emitVirtualObjectDelete(cgf, de, ptr, elementType,
+                                                      dtor);
+          return;
+        }
       }
     }
   }
@@ -1603,10 +1631,12 @@ void CIRGenFunction::emitCXXDeleteExpr(const CXXDeleteExpr *e) {
       if (rd->hasDefinition() && !rd->hasTrivialDestructor()) {
         const auto *dtor = rd->getDestructor();
         if (dtor && dtor->isVirtual()) {
-          cgm.requireVectorDestructorDefinition(rd);
-          cgm.getCXXABI().emitVirtualObjectDelete(*this, e, ptr, deleteTy,
-                                                  dtor);
-          return;
+          if (!tryDevirtualizeDtorCall(e, dtor, cgm.getLangOpts())) {
+            cgm.requireVectorDestructorDefinition(rd);
+            cgm.getCXXABI().emitVirtualObjectDelete(*this, e, ptr, deleteTy,
+                                                    dtor);
+            return;
+          }
         }
       }
     }
