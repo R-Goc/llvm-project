@@ -526,6 +526,38 @@ void CIRGenFunction::emitFunctionProlog(const FunctionArgList &args,
     mlir::Location fnBodyBegin = getLoc(bodyBeginLoc);
     builder.CIRBaseBuilderTy::createStore(fnBodyBegin, paramVal, addrVal);
   }
+
+  // Push cleanups for callee-destructed parameters (e.g. MSVC ABI, trivial_abi).
+  // In MSVC ABI, parameters are destroyed left-to-right, which requires pushing
+  // cleanups in reverse order onto the LIFO EH stack so they execute in
+  // left-to-right order at function exit.
+  if (!curFuncIsThunk) {
+    auto pushParamCleanup = [&](const VarDecl *paramVar) {
+      QualType ty = paramVar->getType();
+      if (ty->isRecordType() &&
+          ty->castAsRecordDecl()->isParamDestroyedInCallee()) {
+        if (QualType::DestructionKind dtorKind =
+                paramVar->needsDestruction(getContext())) {
+          assert((dtorKind == QualType::DK_cxx_destructor ||
+                  dtorKind == QualType::DK_nontrivial_c_struct) &&
+                 "unexpected destructor type");
+          Address addr = getAddrOfLocalVar(paramVar);
+          pushDestroy(dtorKind, addr, ty);
+          if (const auto *pvd = dyn_cast<ParmVarDecl>(paramVar))
+            calleeDestructedParamCleanups[pvd] = ehStack.stable_begin();
+        }
+      }
+    };
+
+    if (getTarget().getCXXABI().areArgsDestroyedLeftToRightInCallee()) {
+      for (int i = static_cast<int>(args.size()) - 1; i >= 0; --i)
+        pushParamCleanup(args[i]);
+    } else {
+      for (size_t i = 0; i < args.size(); ++i)
+        pushParamCleanup(args[i]);
+    }
+  }
+
   assert(builder.getInsertionBlock() && "Should be valid");
 }
 

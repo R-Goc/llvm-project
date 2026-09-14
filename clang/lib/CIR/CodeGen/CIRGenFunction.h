@@ -36,6 +36,7 @@
 #include "clang/CIR/Dialect/IR/CIRDialect.h"
 #include "clang/CIR/MissingFeatures.h"
 #include "clang/CIR/TypeEvaluationKind.h"
+#include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/ScopedHashTable.h"
 #include "llvm/IR/Instructions.h"
 
@@ -1119,6 +1120,9 @@ public:
   /// The cleanup depth enclosing all the cleanups associated with the
   /// parameters.
   EHScopeStack::stable_iterator prologueCleanupDepth;
+
+  llvm::DenseMap<const ParmVarDecl *, EHScopeStack::stable_iterator>
+      calleeDestructedParamCleanups;
 
   bool isCatchOrCleanupRequired();
   bool currentFunctionUsesSEHTry() const;
