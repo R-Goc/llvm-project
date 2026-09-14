@@ -1351,9 +1351,9 @@ CIRGenModule::getOrCreateCIRGlobal(StringRef mangledName, mlir::Type ty,
 
     // If required by the ABI, treat declarations of static data members with
     // inline initializers as definitions.
-    if (astContext.isMSStaticDataMemberInlineDefinition(d))
-      errorNYI(d->getSourceRange(),
-               "getOrCreateCIRGlobal: MS static data member inline definition");
+    if (astContext.isMSStaticDataMemberInlineDefinition(d)) {
+      emitGlobalVarDefinition(d);
+    }
 
     // Emit section information for extern variables.
     if (d->hasExternalStorage()) {
