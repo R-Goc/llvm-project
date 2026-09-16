@@ -71,10 +71,11 @@ private:
   bool ZeroExt : 1;
   bool IndirectByVal : 1;
   bool IndirectRealign : 1;
+  bool SRetAfterThis : 1;
 
   ArgInfo(Kind K = Direct)
       : TheKind(K), SignExt(false), ZeroExt(false), IndirectByVal(false),
-        IndirectRealign(false) {}
+        IndirectRealign(false), SRetAfterThis(false) {}
 
 public:
   /// \param T The type to coerce to. If null, the argument's original type is
@@ -94,7 +95,7 @@ public:
     return AI;
   }
 
-  static ArgInfo getExtend(const Type *T) {
+  static ArgInfo getExtend(const Type *T, bool Signed) {
     assert(T && "Type cannot be null");
     assert(T->isInteger() && "Unexpected type - only integers can be extended");
 
@@ -103,13 +104,19 @@ public:
     AI.Alignment = std::nullopt;
     AI.DirectAttr.Offset = 0;
 
-    const IntegerType *IntTy = cast<IntegerType>(T);
-    if (IntTy->isSigned())
+    if (Signed)
       AI.setSignExt();
     else
       AI.setZeroExt();
 
     return AI;
+  }
+
+  static ArgInfo getExtend(const Type *T) {
+    assert(T && "Type cannot be null");
+    assert(T->isInteger() && "Unexpected type - only integers can be extended");
+    const IntegerType *IntTy = cast<IntegerType>(T);
+    return getExtend(T, IntTy->isSigned());
   }
 
   /// Realign: the caller couldn't guarantee sufficient alignment - the callee
@@ -193,6 +200,9 @@ public:
     return !SignExt && !ZeroExt;
   }
 
+  bool isSRetAfterThis() const { return SRetAfterThis; }
+  void setSRetAfterThis(bool Value) { SRetAfterThis = Value; }
+
   const Type *getCoerceToType() const {
     assert((isDirect() || isExtend()) && "Invalid Kind!");
     return CoercionType;
@@ -205,6 +215,8 @@ struct ArgEntry {
 
   ArgEntry(const Type *T) : ABIType(T), Info(ArgInfo::getDirect()) {}
   ArgEntry(const Type *T, ArgInfo A) : ABIType(T), Info(A) {}
+
+  const Type *type() const { return ABIType; }
 };
 
 /// Whether a signature accepts arguments beyond its declared parameters, and
@@ -246,11 +258,13 @@ private:
   unsigned NumArgs;
   CallingConv::ID CC = CallingConv::C;
   RequiredArgs Required;
+  bool IsInstanceMethod : 1;
 
   FunctionInfo(CallingConv::ID CC, const Type *RetTy, unsigned NumArguments,
                RequiredArgs Required)
       : ReturnType(RetTy), ReturnInfo(ArgInfo::getDirect()),
-        NumArgs(NumArguments), CC(CC), Required(Required) {}
+        NumArgs(NumArguments), CC(CC), Required(Required),
+        IsInstanceMethod(false) {}
 
   friend class TrailingObjects;
 
@@ -276,6 +290,9 @@ public:
   const ArgInfo &getReturnInfo() const { return ReturnInfo; }
 
   CallingConv::ID getCallingConvention() const { return CC; }
+
+  bool isInstanceMethod() const { return IsInstanceMethod; }
+  void setIsInstanceMethod(bool Value) { IsInstanceMethod = Value; }
 
   bool isVariadic() const { return Required.allowsOptionalArgs(); }
 

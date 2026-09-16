@@ -8,5 +8,6 @@ add_llvm_unittest(ABITests
   AArch64TargetInfoTest.cpp
   IRTypeMapperTest.cpp
   X86TargetInfoTest.cpp
+  WinX86_64TargetInfoTest.cpp
   TypesTest.cpp
   )
