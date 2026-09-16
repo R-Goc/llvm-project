@@ -22,6 +22,7 @@
 #include "llvm/Support/Casting.h"
 #include "llvm/Support/Compiler.h"
 #include "llvm/Support/TypeSize.h"
+#include <algorithm>
 
 namespace llvm {
 namespace abi {
@@ -480,6 +481,12 @@ public:
                                     bool IsBitInt = false) {
     return new (Allocator.Allocate<IntegerType>())
         IntegerType(BitWidth, Align, Signed, IsBitInt);
+  }
+
+  const IntegerType *getIntegerType(TypeSize Size, bool Signed = false) {
+    uint64_t BitWidth = Size.getFixedValue();
+    return getIntegerType(BitWidth, Align(std::max<uint64_t>(1, BitWidth / 8)),
+                          Signed);
   }
 
   const FloatType *getFloatType(const fltSemantics &Semantics, Align Align) {
