@@ -42,7 +42,7 @@ static MemberCallInfo commonBuildCXXMemberOrOperatorCall(
   const auto *md = cast<CXXMethodDecl>(gd.getDecl());
   assert(ce == nullptr || isa<CXXMemberCallExpr>(ce) ||
          isa<CXXOperatorCallExpr>(ce));
-  assert(md->isInstance() &&
+  assert(md->isImplicitObjectMemberFunction() &&
          "Trying to emit a member or operator call expr on a static method!");
 
   // Push the this ptr.
@@ -322,7 +322,7 @@ RValue
 CIRGenFunction::emitCXXOperatorMemberCallExpr(const CXXOperatorCallExpr *e,
                                               const CXXMethodDecl *md,
                                               ReturnValueSlot returnValue) {
-  assert(md->isInstance() &&
+  assert(md->isImplicitObjectMemberFunction() &&
          "Trying to emit a member call expr on a static method!");
   return emitCXXMemberOrOperatorMemberCallExpr(
       e, md, returnValue, /*HasQualifier=*/false, /*Qualifier=*/std::nullopt,

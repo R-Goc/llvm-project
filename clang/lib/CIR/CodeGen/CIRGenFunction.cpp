@@ -539,10 +539,10 @@ void CIRGenFunction::emitFunctionProlog(const FunctionArgList &args,
                                           addr.getPointer());
   }
 
-  // Push cleanups for callee-destructed parameters (e.g. MSVC ABI, trivial_abi).
-  // In MSVC ABI, parameters are destroyed left-to-right, which requires pushing
-  // cleanups in reverse order onto the LIFO EH stack so they execute in
-  // left-to-right order at function exit.
+  // Push cleanups for callee-destructed parameters (e.g. MSVC ABI,
+  // trivial_abi). In MSVC ABI, parameters are destroyed left-to-right, which
+  // requires pushing cleanups in reverse order onto the LIFO EH stack so they
+  // execute in left-to-right order at function exit.
   if (!curFuncIsThunk) {
     auto pushParamCleanup = [&](const VarDecl *paramVar) {
       QualType ty = paramVar->getType();
@@ -622,9 +622,6 @@ void CIRGenFunction::startFunction(GlobalDecl gd, QualType returnType,
   mlir::Block *entryBB = &fn.getBlocks().front();
   builder.setInsertionPointToStart(entryBB);
 
-  // Determine the function body end location.  A function without a body
-  // uses its declaration's location, and a null fd uses loc.
-
   // When the current function has an indirect return, initialize returnValue
   // directly from the caller's sret buffer without creating a local __retval
   // alloca.
@@ -666,6 +663,10 @@ void CIRGenFunction::startFunction(GlobalDecl gd, QualType returnType,
 
   emitFunctionProlog(args, entryBB, fd, bodyBeginLoc);
 
+  // Only implicit-object member functions (without an explicit `this`
+  // parameter) receive an implicit `this` argument that the CXXABI prolog has
+  // to set up. C++23 explicit-object members (P0847R7) carry their object via a
+  // regular parameter and use the standard parameter prolog instead.
   if (const auto *md = dyn_cast_if_present<CXXMethodDecl>(d);
       md && !md->isStatic()) {
     bool isInLambda =
