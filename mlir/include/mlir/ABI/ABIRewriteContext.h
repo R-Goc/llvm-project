@@ -88,6 +88,11 @@ struct ArgClassification {
   unsigned neededIntRegs = 0;
   unsigned neededSseRegs = 0;
 
+  /// For Indirect return (sret): whether the sret pointer is passed as the
+  /// second argument (after the `this` pointer) rather than the first.
+  /// Used by Windows x86-64 ABI for C++ instance methods returning structs.
+  bool sretAfterThis = false;
+
   /// Whether the value is passed as-is, so a rewriter can leave it alone.
   /// Only an uncoerced Direct qualifies.  Extend counts as needing a rewrite
   /// even though it only adds an attribute, because the attribute changes
@@ -102,7 +107,8 @@ struct ArgClassification {
            signExtend == other.signExtend && canFlatten == other.canFlatten &&
            byVal == other.byVal && directOffset == other.directOffset &&
            neededIntRegs == other.neededIntRegs &&
-           neededSseRegs == other.neededSseRegs;
+           neededSseRegs == other.neededSseRegs &&
+           sretAfterThis == other.sretAfterThis;
   }
 
   static ArgClassification getDirect() {

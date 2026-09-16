@@ -1026,7 +1026,8 @@ insertArgCoercion(mlir::FunctionOpInterface funcOp,
                   const FunctionClassification &fc, mlir::OpBuilder &builder,
                   const mlir::DataLayout &dl, bool hasSRetArg,
                   SmallVectorImpl<std::pair<cir::AllocaOp, mlir::BlockArgument>>
-                      &pendingParamSlots) {
+                      &pendingParamSlots,
+                  unsigned sretIndex = 0) {
   mlir::Region &body = funcOp->getRegion(0);
   if (body.empty())
     return mlir::success();
@@ -1036,11 +1037,19 @@ insertArgCoercion(mlir::FunctionOpInterface funcOp,
   // one block argument slot; each Expand classification occupies N slots
   // (one per struct field), so the running index must be incremented by N
   // rather than 1 after processing an Expand arg.
-  unsigned blockArgIdx = hasSRetArg ? 1 : 0;
+  unsigned blockArgIdx = (hasSRetArg && sretIndex == 0) ? 1 : 0;
 
-  for (const ArgClassification &ac : fc.argInfos) {
+  for (auto it : llvm::enumerate(fc.argInfos)) {
+    size_t i = it.index();
+    const auto &ac = it.value();
     assert(blockArgIdx < entry.getNumArguments() &&
            "classification count must not exceed entry block arguments");
+
+    auto advanceBlockArg = [&](unsigned count = 1) {
+      blockArgIdx += count;
+      if (hasSRetArg && sretIndex > 0 && i == sretIndex - 1)
+        ++blockArgIdx;
+    };
 
     if (ac.kind == ArgKind::Expand) {
       // The block arg at blockArgIdx currently has the original struct type.
@@ -1112,7 +1121,7 @@ insertArgCoercion(mlir::FunctionOpInterface funcOp,
                              fieldPtr);
       }
 
-      blockArgIdx += numFields;
+      advanceBlockArg(numFields);
       continue;
     }
 
@@ -1174,7 +1183,7 @@ insertArgCoercion(mlir::FunctionOpInterface funcOp,
                                      flattenOps)))
         return mlir::failure();
 
-      blockArgIdx += numFields;
+      advanceBlockArg(numFields);
       continue;
     }
 
@@ -1182,7 +1191,7 @@ insertArgCoercion(mlir::FunctionOpInterface funcOp,
       mlir::Type oldArgTy = blockArg.getType();
       mlir::Type newArgTy = ac.coercedType;
       if (oldArgTy == newArgTy) {
-        ++blockArgIdx;
+        advanceBlockArg();
         continue;
       }
       blockArg.setType(newArgTy);
@@ -1289,7 +1298,7 @@ insertArgCoercion(mlir::FunctionOpInterface funcOp,
     }
     // Ignore, Extend, and Direct-without-coerce need no block-level changes.
 
-    ++blockArgIdx;
+    advanceBlockArg();
   }
   return mlir::success();
 }
@@ -1323,8 +1332,8 @@ insertArgCoercion(mlir::FunctionOpInterface funcOp,
 /// CIRGen, so it is asserted via `cast<>` rather than guarded with a
 /// fallback.
 void insertSRetStores(mlir::FunctionOpInterface funcOp, mlir::Type origRetTy,
-                      mlir::OpBuilder &builder) {
-  mlir::Value sretPtr = funcOp.getArguments()[0];
+                      mlir::OpBuilder &builder, unsigned sretIndex = 0) {
+  mlir::Value sretPtr = funcOp.getArguments()[sretIndex];
 
   SmallVector<cir::ReturnOp> returnOps;
   funcOp->walk([&](cir::ReturnOp retOp) { returnOps.push_back(retOp); });
@@ -1394,16 +1403,18 @@ SmallVector<mlir::NamedAttribute> buildSretSlotAttrs(mlir::OpBuilder &builder,
 /// 1..N behind the sret slot.
 void applySretSlotAttrs(cir::CallOp newCall, mlir::ArrayAttr argAttrs,
                         mlir::Type retTy, uint64_t align,
-                        mlir::OpBuilder &builder) {
+                        mlir::OpBuilder &builder, unsigned sretIndex = 0) {
   mlir::MLIRContext *ctx = newCall->getContext();
   SmallVector<mlir::NamedAttribute> sretAttrs =
       buildSretSlotAttrs(builder, retTy, align, /*withNoalias=*/false);
 
   SmallVector<mlir::Attribute> newArgAttrs;
-  newArgAttrs.reserve(newCall.getArgOperands().size());
-  newArgAttrs.push_back(mlir::DictionaryAttr::get(ctx, sretAttrs));
   if (argAttrs)
-    llvm::append_range(newArgAttrs, argAttrs);
+    newArgAttrs.assign(argAttrs.begin(), argAttrs.end());
+  if (newArgAttrs.size() < sretIndex)
+    newArgAttrs.resize(sretIndex, mlir::DictionaryAttr::get(ctx));
+  newArgAttrs.insert(newArgAttrs.begin() + sretIndex,
+                     mlir::DictionaryAttr::get(ctx, sretAttrs));
   assert(newArgAttrs.size() <= newCall.getArgOperands().size() &&
          "arg_attrs wider than the rewritten call's operand list");
   newArgAttrs.resize(newCall.getArgOperands().size(),
@@ -1519,9 +1530,9 @@ mlir::LogicalResult rewriteIndirectReturnCall(
     sretSlot = alloca;
   }
 
-  SmallVector<mlir::Value> sretArgs;
-  sretArgs.push_back(sretSlot);
-  sretArgs.append(newArgs.begin(), newArgs.end());
+  unsigned sretIndex = fc.returnInfo.sretAfterThis ? 1u : 0u;
+  SmallVector<mlir::Value> sretArgs(newArgs.begin(), newArgs.end());
+  sretArgs.insert(sretArgs.begin() + sretIndex, sretSlot);
 
   // numEllipsisArgs counts from the end, so the sret slot prepended here stays
   // in the retyped signature, as it does in classic CodeGen.
@@ -1538,7 +1549,8 @@ mlir::LogicalResult rewriteIndirectReturnCall(
   mlir::ArrayAttr argAttrs = call->getAttrOfType<mlir::ArrayAttr>("arg_attrs");
   if (needsArgAttrUpdate(fc))
     argAttrs = updateArgAttrs(ctx, origCallArgTypes, argAttrs, fc, dl);
-  applySretSlotAttrs(newCall, argAttrs, origRetTy, sretAlign, builder);
+  applySretSlotAttrs(newCall, argAttrs, origRetTy, sretAlign, builder,
+                     sretIndex);
 
   if (reuseStore) {
     // The callee now constructs directly into the destination slot, so the
@@ -1792,19 +1804,21 @@ mlir::LogicalResult CIRABIRewriteContext::rewriteFunctionDefinition(
   // below.
   bool hasSRet =
       fc.returnInfo.kind == ArgKind::Indirect && !oldResultTypes.empty();
+  unsigned sretIndex = (hasSRet && fc.returnInfo.sretAfterThis) ? 1u : 0u;
   if (hasSRet)
-    newArgTypes.insert(newArgTypes.begin(), cir::PointerType::get(origRetTy));
+    newArgTypes.insert(newArgTypes.begin() + sretIndex,
+                       cir::PointerType::get(origRetTy));
 
   if (funcOp.isDefinition()) {
     mlir::Region &body = funcOp->getRegion(0);
     if (!body.empty()) {
-      // Prepend the sret pointer block argument and route every cir.return
-      // through it before any index-based argument handling below (which
-      // then accounts for the +1 offset).
+      // Prepend or insert the sret pointer block argument and route every
+      // cir.return through it before any index-based argument handling below
+      // (which then accounts for the offset).
       if (hasSRet) {
-        body.front().insertArgument(0u, cir::PointerType::get(origRetTy),
+        body.front().insertArgument(sretIndex, cir::PointerType::get(origRetTy),
                                     funcOp.getLoc());
-        insertSRetStores(funcOp, origRetTy, builder);
+        insertSRetStores(funcOp, origRetTy, builder, sretIndex);
       }
 
       // Reshape the entry block for the classifications that change what a
@@ -1814,7 +1828,7 @@ mlir::LogicalResult CIRABIRewriteContext::rewriteFunctionDefinition(
       // field.  Done before the Ignore-drop below so the entry block
       // argument indices used here still refer to the original positions.
       if (failed(insertArgCoercion(funcOp, fc, builder, dl, hasSRet,
-                                   pendingParamSlots)))
+                                   pendingParamSlots, sretIndex)))
         return mlir::failure();
 
       // Direct return with coerced type: insert a coercion at every
@@ -1836,7 +1850,7 @@ mlir::LogicalResult CIRABIRewriteContext::rewriteFunctionDefinition(
       // insertArgCoercion: an Expand arg or a Direct+canFlatten arg occupies N
       // slots, every other kept kind one.  On erase, do not advance the index
       // -- the next block argument shifts into the vacated slot.
-      unsigned blockArgIdx = hasSRet ? 1 : 0;
+      unsigned blockArgIdx = (hasSRet && sretIndex == 0) ? 1 : 0;
       for (auto [i, ac] : llvm::enumerate(fc.argInfos)) {
         if (blockArgIdx >= entry.getNumArguments())
           break;
@@ -1849,6 +1863,8 @@ mlir::LogicalResult CIRABIRewriteContext::rewriteFunctionDefinition(
             arg.replaceAllUsesWith(poison);
           }
           entry.eraseArgument(blockArgIdx);
+          if (hasSRet && sretIndex > 0 && i == sretIndex - 1)
+            ++blockArgIdx;
           continue;
         }
         if (cir::RecordType flatTy = getFlattenedCoercedType(ac))
@@ -1856,6 +1872,8 @@ mlir::LogicalResult CIRABIRewriteContext::rewriteFunctionDefinition(
         else if (ac.kind == ArgKind::Expand)
           blockArgIdx += cast<cir::RecordType>(oldArgTypes[i]).getNumElements();
         else
+          ++blockArgIdx;
+        if (hasSRet && sretIndex > 0 && i == sretIndex - 1)
           ++blockArgIdx;
       }
     }
@@ -1891,15 +1909,17 @@ mlir::LogicalResult CIRABIRewriteContext::rewriteFunctionDefinition(
     mlir::ArrayAttr updated =
         updateArgAttrs(ctx, oldArgTypes, existing, fc, dl);
     if (hasSRet) {
-      // Prepend the sret slot's attribute dict (slot 0); the per-argument
-      // dicts shift to slots 1..N.  noalias is valid only on the callee's
-      // parameter, so it is added only for definitions.
+      // Prepend or insert the sret slot's attribute dict at sretIndex;
+      // the per-argument dicts shift accordingly. noalias is valid only on
+      // the callee's parameter, so it is added only for definitions.
       SmallVector<mlir::NamedAttribute> sretAttrs = buildSretSlotAttrs(
           builder, origRetTy, fc.returnInfo.indirectAlign.value(),
           /*withNoalias=*/funcOp.isDefinition());
-      SmallVector<mlir::Attribute> withSret;
-      withSret.push_back(mlir::DictionaryAttr::get(ctx, sretAttrs));
-      llvm::append_range(withSret, updated);
+      SmallVector<mlir::Attribute> withSret(updated.begin(), updated.end());
+      if (withSret.size() < sretIndex)
+        withSret.resize(sretIndex, mlir::DictionaryAttr::get(ctx));
+      withSret.insert(withSret.begin() + sretIndex,
+                      mlir::DictionaryAttr::get(ctx, sretAttrs));
       funcOp->setAttr("arg_attrs", mlir::ArrayAttr::get(ctx, withSret));
     } else {
       funcOp->setAttr("arg_attrs", updated);
