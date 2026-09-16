@@ -20,11 +20,11 @@ void test_member_methods() {
   instance.simple_method();
 
   // Explicit __cdecl overrides default to C calling convention.
-  // CIR: cir.call @"?cdecl_method@C@@QAAXXZ"(%{{.+}}) : (!cir.ptr<!rec_C>{{.*}}) -> ()
+  // CIR: cir.call @"?cdecl_method@C@@QAAXXZ"(%{{.+}}){{.*}} : (!cir.ptr<!rec_C>{{.*}}) -> ()
   instance.cdecl_method();
 
   // Variadic member methods override default thiscall to C calling convention.
-  // CIR: cir.call @"?vararg_method@C@@QAAXPBDZZ"(%{{.+}}, %{{.+}}) : (!cir.ptr<!rec_C>{{.*}}, !cir.ptr<!s8i>{{.*}}) -> ()
+  // CIR: cir.call @"?vararg_method@C@@QAAXPBDZZ"(%{{.+}}, %{{.+}}){{.*}} : (!cir.ptr<!rec_C>{{.*}}, !cir.ptr<!s8i>{{.*}}) -> ()
   instance.vararg_method("hello");
 
   // Static member methods default to C calling convention.

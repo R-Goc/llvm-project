@@ -603,9 +603,12 @@ convertABIArgInfo(const llvm::abi::ArgInfo &info, MLIRContext *ctx,
     mlir::Type extendedTy = abiTypeToCIR(info.getCoerceToType(), ctx);
     return ArgClassification::getExtend(extendedTy, info.isSignExt());
   }
-  if (info.isIndirect())
-    return ArgClassification::getIndirect(info.getIndirectAlign(),
-                                          info.getIndirectByVal());
+  if (info.isIndirect()) {
+    auto ac = ArgClassification::getIndirect(info.getIndirectAlign(),
+                                            info.getIndirectByVal());
+    ac.sretAfterThis = info.isSRetAfterThis();
+    return ac;
+  }
   assert(info.isIgnore() && "Unexpected classification");
   return ArgClassification::getIgnore();
 }
@@ -633,7 +636,8 @@ static std::optional<FunctionClassification> classifyX86_64Signature(
     MLIRContext *ctx, const DataLayout &dl,
     mlir::abi::ABITypeMapper &typeMapper,
     const llvm::abi::TargetInfo &targetInfo, ModuleOp modOp,
-    llvm::function_ref<mlir::InFlightDiagnostic()> emitError) {
+    llvm::function_ref<mlir::InFlightDiagnostic()> emitError,
+    bool isInstanceMethod = false) {
   assert(retCIR && "signature return type must be non-null");
   assert((!required.allowsOptionalArgs() ||
           required.getNumRequiredArgs() <= inputs.size()) &&
@@ -663,6 +667,7 @@ static std::optional<FunctionClassification> classifyX86_64Signature(
 
   std::unique_ptr<llvm::abi::FunctionInfo> fi = llvm::abi::FunctionInfo::create(
       llvm::CallingConv::C, retAbi, argAbi, required);
+  fi->setIsInstanceMethod(isInstanceMethod);
   targetInfo.computeInfo(*fi);
 
   // convertABIArgInfo returns nullopt when the classifier picks a coercion this
@@ -730,10 +735,12 @@ classifyX86_64Function(cir::FuncOp func, const DataLayout &dl,
                        const llvm::abi::TargetInfo &targetInfo,
                        ModuleOp modOp) {
   cir::FuncType fnTy = func.getFunctionType();
+  bool isInstanceMethod = func->hasAttr("cir.instance_method");
   return classifyX86_64Signature(fnTy.getReturnType(), fnTy.getInputs(),
                                  requiredArgs(fnTy), func->getContext(), dl,
                                  typeMapper, targetInfo, modOp,
-                                 [&]() { return func.emitOpError(); });
+                                 [&]() { return func.emitOpError(); },
+                                 isInstanceMethod);
 }
 
 /// Classify a call that passes arguments through an ellipsis.  The callee's
@@ -750,10 +757,11 @@ static std::optional<FunctionClassification> classifyX86_64VariadicCall(
   assert(calleeTy.isVarArg() &&
          "only a variadic callee can take more operands than it declares");
   Operation *op = call.getOperation();
+  bool isInstanceMethod = op->hasAttr("cir.instance_method");
   return classifyX86_64Signature(
       calleeTy.getReturnType(), call.getArgOperands().getTypes(),
       requiredArgs(calleeTy), op->getContext(), dl, typeMapper, targetInfo,
-      modOp, [&]() { return op->emitOpError(); });
+      modOp, [&]() { return op->emitOpError(); }, isInstanceMethod);
 }
 
 #ifndef NDEBUG
@@ -900,7 +908,9 @@ void CallConvLoweringPass::runOnOperation() {
   // per module would misclassify a wide vector in such a function.
   static constexpr unsigned numAvxLevels =
       static_cast<unsigned>(llvm::abi::X86AVXABILevel::Last) + 1;
-  bool isX86 = target == cir::CallConvTarget::X86_64;
+  bool isX86SysV = target == cir::CallConvTarget::X86_64;
+  bool isX86Win64 = target == cir::CallConvTarget::X86_64_Win64;
+  bool isX86 = isX86SysV || isX86Win64;
   std::optional<mlir::abi::ABITypeMapper> x86TypeMapper;
   std::array<std::unique_ptr<llvm::abi::TargetInfo>, numAvxLevels> x86Targets;
   if (isX86)
@@ -911,10 +921,15 @@ void CallConvLoweringPass::runOnOperation() {
            "a new X86AVXABILevel must move X86AVXABILevel::Last");
     std::unique_ptr<llvm::abi::TargetInfo> &slot =
         x86Targets[static_cast<unsigned>(level)];
-    if (!slot)
-      slot = llvm::abi::createX86_64TargetInfo(
-          x86TypeMapper->getTypeBuilder(), level,
-          /*Has64BitPointers=*/true, x86AbiCompat);
+    if (!slot) {
+      if (isX86Win64)
+        slot = llvm::abi::createWinX86_64TargetInfo(
+            x86TypeMapper->getTypeBuilder(), level, x86AbiCompat);
+      else
+        slot = llvm::abi::createX86_64TargetInfo(
+            x86TypeMapper->getTypeBuilder(), level,
+            /*Has64BitPointers=*/true, x86AbiCompat);
+    }
     return *slot;
   };
   llvm::abi::X86AVXABILevel baseAvxLevel = x86AvxAbiLevel.getValue();

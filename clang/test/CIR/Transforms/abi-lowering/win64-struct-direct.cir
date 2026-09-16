@@ -1,0 +1,147 @@
+// RUN: cir-opt %s -cir-call-conv-lowering="target=x86_64-win64" | FileCheck %s
+
+!s8i = !cir.int<s, 8>
+!s16i = !cir.int<s, 16>
+!s32i = !cir.int<s, 32>
+!s64i = !cir.int<s, 64>
+!u8i = !cir.int<u, 8>
+!u16i = !cir.int<u, 16>
+!u32i = !cir.int<u, 32>
+!u64i = !cir.int<u, 64>
+
+!rec_S1 = !cir.struct<"S1" {data !s8i}>
+!rec_S2 = !cir.struct<"S2" {data !s16i}>
+!rec_S4 = !cir.struct<"S4" {data !s32i}>
+!rec_S8 = !cir.struct<"S8" {data !s64i}>
+
+module attributes {
+  cir.triple = "x86_64-unknown-windows-msvc",
+  dlti.dl_spec = #dlti.dl_spec<
+    #dlti.dl_entry<i8, dense<8>: vector<2xi64>>,
+    #dlti.dl_entry<i16, dense<16>: vector<2xi64>>,
+    #dlti.dl_entry<i32, dense<32>: vector<2xi64>>,
+    #dlti.dl_entry<i64, dense<64>: vector<2xi64>>>
+} {
+
+  // Test 1-byte struct passed and returned directly coerced to !u8i.
+  cir.func @pass_s1(%arg0: !rec_S1) -> !rec_S1 {
+    %0 = cir.alloca "s" align(1) : !cir.ptr<!rec_S1>
+    cir.store %arg0, %0 : !rec_S1, !cir.ptr<!rec_S1>
+    %1 = cir.load %0 : !cir.ptr<!rec_S1>, !rec_S1
+    cir.return %1 : !rec_S1
+  }
+
+  // CHECK-LABEL: cir.func @pass_s1(%arg0: !u8i) -> !u8i
+  // CHECK-DAG:     %[[COERCE_RET:.*]] = cir.alloca "coerce" {{.*}} : !cir.ptr<!rec_S1>
+  // CHECK-DAG:     %[[COERCE_ARG:.*]] = cir.alloca "coerce" {{.*}} : !cir.ptr<!u8i>
+  // CHECK:         cir.store %arg0, %[[COERCE_ARG]] : !u8i, !cir.ptr<!u8i>
+  // CHECK:         %[[CAST_ARG:.*]] = cir.cast bitcast %[[COERCE_ARG]] : !cir.ptr<!u8i> -> !cir.ptr<!rec_S1>
+  // CHECK:         %[[REC_ARG:.*]] = cir.load %[[CAST_ARG]] : !cir.ptr<!rec_S1>, !rec_S1
+  // CHECK:         cir.store %[[REC_ARG]], %{{.*}} : !rec_S1, !cir.ptr<!rec_S1>
+  // CHECK:         %[[RETVAL:.*]] = cir.load %{{.*}} : !cir.ptr<!rec_S1>, !rec_S1
+  // CHECK:         cir.store %[[RETVAL]], %[[COERCE_RET]] : !rec_S1, !cir.ptr<!rec_S1>
+  // CHECK:         %[[CAST_RET:.*]] = cir.cast bitcast %[[COERCE_RET]] : !cir.ptr<!rec_S1> -> !cir.ptr<!u8i>
+  // CHECK:         %[[RES:.*]] = cir.load %[[CAST_RET]] : !cir.ptr<!u8i>, !u8i
+  // CHECK:         cir.return %[[RES]] : !u8i
+
+  // Test 2-byte struct passed and returned directly coerced to !u16i.
+  cir.func @pass_s2(%arg0: !rec_S2) -> !rec_S2 {
+    %0 = cir.alloca "s" align(2) : !cir.ptr<!rec_S2>
+    cir.store %arg0, %0 : !rec_S2, !cir.ptr<!rec_S2>
+    %1 = cir.load %0 : !cir.ptr<!rec_S2>, !rec_S2
+    cir.return %1 : !rec_S2
+  }
+
+  // CHECK-LABEL: cir.func @pass_s2(%arg0: !u16i) -> !u16i
+  // CHECK-DAG:     %[[COERCE_RET:.*]] = cir.alloca "coerce" {{.*}} : !cir.ptr<!rec_S2>
+  // CHECK-DAG:     %[[COERCE_ARG:.*]] = cir.alloca "coerce" {{.*}} : !cir.ptr<!u16i>
+  // CHECK:         cir.store %arg0, %[[COERCE_ARG]] : !u16i, !cir.ptr<!u16i>
+  // CHECK:         %[[CAST_ARG:.*]] = cir.cast bitcast %[[COERCE_ARG]] : !cir.ptr<!u16i> -> !cir.ptr<!rec_S2>
+  // CHECK:         %[[REC_ARG:.*]] = cir.load %[[CAST_ARG]] : !cir.ptr<!rec_S2>, !rec_S2
+  // CHECK:         cir.store %[[REC_ARG]], %{{.*}} : !rec_S2, !cir.ptr<!rec_S2>
+  // CHECK:         %[[RETVAL:.*]] = cir.load %{{.*}} : !cir.ptr<!rec_S2>, !rec_S2
+  // CHECK:         cir.store %[[RETVAL]], %[[COERCE_RET]] : !rec_S2, !cir.ptr<!rec_S2>
+  // CHECK:         %[[CAST_RET:.*]] = cir.cast bitcast %[[COERCE_RET]] : !cir.ptr<!rec_S2> -> !cir.ptr<!u16i>
+  // CHECK:         %[[RES:.*]] = cir.load %[[CAST_RET]] : !cir.ptr<!u16i>, !u16i
+  // CHECK:         cir.return %[[RES]] : !u16i
+
+  // Test 4-byte struct passed and returned directly coerced to !u32i.
+  cir.func @pass_s4(%arg0: !rec_S4) -> !rec_S4 {
+    %0 = cir.alloca "s" align(4) : !cir.ptr<!rec_S4>
+    cir.store %arg0, %0 : !rec_S4, !cir.ptr<!rec_S4>
+    %1 = cir.load %0 : !cir.ptr<!rec_S4>, !rec_S4
+    cir.return %1 : !rec_S4
+  }
+
+  // CHECK-LABEL: cir.func @pass_s4(%arg0: !u32i) -> !u32i
+  // CHECK-DAG:     %[[COERCE_RET:.*]] = cir.alloca "coerce" {{.*}} : !cir.ptr<!rec_S4>
+  // CHECK-DAG:     %[[COERCE_ARG:.*]] = cir.alloca "coerce" {{.*}} : !cir.ptr<!u32i>
+  // CHECK:         cir.store %arg0, %[[COERCE_ARG]] : !u32i, !cir.ptr<!u32i>
+  // CHECK:         %[[CAST_ARG:.*]] = cir.cast bitcast %[[COERCE_ARG]] : !cir.ptr<!u32i> -> !cir.ptr<!rec_S4>
+  // CHECK:         %[[REC_ARG:.*]] = cir.load %[[CAST_ARG]] : !cir.ptr<!rec_S4>, !rec_S4
+  // CHECK:         cir.store %[[REC_ARG]], %{{.*}} : !rec_S4, !cir.ptr<!rec_S4>
+  // CHECK:         %[[RETVAL:.*]] = cir.load %{{.*}} : !cir.ptr<!rec_S4>, !rec_S4
+  // CHECK:         cir.store %[[RETVAL]], %[[COERCE_RET]] : !rec_S4, !cir.ptr<!rec_S4>
+  // CHECK:         %[[CAST_RET:.*]] = cir.cast bitcast %[[COERCE_RET]] : !cir.ptr<!rec_S4> -> !cir.ptr<!u32i>
+  // CHECK:         %[[RES:.*]] = cir.load %[[CAST_RET]] : !cir.ptr<!u32i>, !u32i
+  // CHECK:         cir.return %[[RES]] : !u32i
+
+  // Test 8-byte struct passed and returned directly coerced to !u64i.
+  cir.func @pass_s8(%arg0: !rec_S8) -> !rec_S8 {
+    %0 = cir.alloca "s" align(8) : !cir.ptr<!rec_S8>
+    cir.store %arg0, %0 : !rec_S8, !cir.ptr<!rec_S8>
+    %1 = cir.load %0 : !cir.ptr<!rec_S8>, !rec_S8
+    cir.return %1 : !rec_S8
+  }
+
+  // CHECK-LABEL: cir.func @pass_s8(%arg0: !u64i) -> !u64i
+  // CHECK-DAG:     %[[COERCE_RET:.*]] = cir.alloca "coerce" {{.*}} : !cir.ptr<!rec_S8>
+  // CHECK-DAG:     %[[COERCE_ARG:.*]] = cir.alloca "coerce" {{.*}} : !cir.ptr<!u64i>
+  // CHECK:         cir.store %arg0, %[[COERCE_ARG]] : !u64i, !cir.ptr<!u64i>
+  // CHECK:         %[[CAST_ARG:.*]] = cir.cast bitcast %[[COERCE_ARG]] : !cir.ptr<!u64i> -> !cir.ptr<!rec_S8>
+  // CHECK:         %[[REC_ARG:.*]] = cir.load %[[CAST_ARG]] : !cir.ptr<!rec_S8>, !rec_S8
+  // CHECK:         cir.store %[[REC_ARG]], %{{.*}} : !rec_S8, !cir.ptr<!rec_S8>
+  // CHECK:         %[[RETVAL:.*]] = cir.load %{{.*}} : !cir.ptr<!rec_S8>, !rec_S8
+  // CHECK:         cir.store %[[RETVAL]], %[[COERCE_RET]] : !rec_S8, !cir.ptr<!rec_S8>
+  // CHECK:         %[[CAST_RET:.*]] = cir.cast bitcast %[[COERCE_RET]] : !cir.ptr<!rec_S8> -> !cir.ptr<!u64i>
+  // CHECK:         %[[RES:.*]] = cir.load %[[CAST_RET]] : !cir.ptr<!u64i>, !u64i
+  // CHECK:         cir.return %[[RES]] : !u64i
+
+  // Call site coercions
+  cir.func @caller(%p1: !cir.ptr<!rec_S1>, %p2: !cir.ptr<!rec_S2>, %p4: !cir.ptr<!rec_S4>, %p8: !cir.ptr<!rec_S8>) {
+    %a1 = cir.load %p1 : !cir.ptr<!rec_S1>, !rec_S1
+    %r1 = cir.call @pass_s1(%a1) : (!rec_S1) -> !rec_S1
+    cir.store %r1, %p1 : !rec_S1, !cir.ptr<!rec_S1>
+
+    %a2 = cir.load %p2 : !cir.ptr<!rec_S2>, !rec_S2
+    %r2 = cir.call @pass_s2(%a2) : (!rec_S2) -> !rec_S2
+    cir.store %r2, %p2 : !rec_S2, !cir.ptr<!rec_S2>
+
+    %a4 = cir.load %p4 : !cir.ptr<!rec_S4>, !rec_S4
+    %r4 = cir.call @pass_s4(%a4) : (!rec_S4) -> !rec_S4
+    cir.store %r4, %p4 : !rec_S4, !cir.ptr<!rec_S4>
+
+    %a8 = cir.load %p8 : !cir.ptr<!rec_S8>, !rec_S8
+    %r8 = cir.call @pass_s8(%a8) : (!rec_S8) -> !rec_S8
+    cir.store %r8, %p8 : !rec_S8, !cir.ptr<!rec_S8>
+    cir.return
+  }
+
+  // CHECK-LABEL: cir.func @caller(
+  // CHECK:         %[[A1_CAST:.*]] = cir.cast bitcast %{{.*}} : !cir.ptr<!rec_S1> -> !cir.ptr<!u8i>
+  // CHECK:         %[[A1_VAL:.*]] = cir.load %[[A1_CAST]] : !cir.ptr<!u8i>, !u8i
+  // CHECK:         %[[R1:.*]] = cir.call @pass_s1(%[[A1_VAL]]) : (!u8i) -> !u8i
+  // CHECK:         cir.store %[[R1]], %{{.*}} : !u8i, !cir.ptr<!u8i>
+  // CHECK:         %[[A2_CAST:.*]] = cir.cast bitcast %{{.*}} : !cir.ptr<!rec_S2> -> !cir.ptr<!u16i>
+  // CHECK:         %[[A2_VAL:.*]] = cir.load %[[A2_CAST]] : !cir.ptr<!u16i>, !u16i
+  // CHECK:         %[[R2:.*]] = cir.call @pass_s2(%[[A2_VAL]]) : (!u16i) -> !u16i
+  // CHECK:         cir.store %[[R2]], %{{.*}} : !u16i, !cir.ptr<!u16i>
+  // CHECK:         %[[A4_CAST:.*]] = cir.cast bitcast %{{.*}} : !cir.ptr<!rec_S4> -> !cir.ptr<!u32i>
+  // CHECK:         %[[A4_VAL:.*]] = cir.load %[[A4_CAST]] : !cir.ptr<!u32i>, !u32i
+  // CHECK:         %[[R4:.*]] = cir.call @pass_s4(%[[A4_VAL]]) : (!u32i) -> !u32i
+  // CHECK:         cir.store %[[R4]], %{{.*}} : !u32i, !cir.ptr<!u32i>
+  // CHECK:         %[[A8_CAST:.*]] = cir.cast bitcast %{{.*}} : !cir.ptr<!rec_S8> -> !cir.ptr<!u64i>
+  // CHECK:         %[[A8_VAL:.*]] = cir.load %[[A8_CAST]] : !cir.ptr<!u64i>, !u64i
+  // CHECK:         %[[R8:.*]] = cir.call @pass_s8(%[[A8_VAL]]) : (!u64i) -> !u64i
+  // CHECK:         cir.store %[[R8]], %{{.*}} : !u64i, !cir.ptr<!u64i>
+}

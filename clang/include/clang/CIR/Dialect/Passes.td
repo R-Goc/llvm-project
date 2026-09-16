@@ -246,7 +246,9 @@ def CallConvLowering : Pass<"cir-call-conv-lowering", "mlir::ModuleOp"> {
              clEnumValN(cir::CallConvTarget::Test, "test",
                         "MLIR test ABI target"),
              clEnumValN(cir::CallConvTarget::X86_64, "x86_64",
-                        "x86_64 System V")
+                        "x86_64 System V"),
+             clEnumValN(cir::CallConvTarget::X86_64_Win64, "x86_64-win64",
+                        "x86_64 Windows")
            )}]>,
     Option<"classificationAttr", "classification-attr", "std::string",
            /*default=*/"\"\"",

@@ -1,0 +1,59 @@
+// RUN: cir-opt %s -cir-call-conv-lowering="target=x86_64-win64" | FileCheck %s
+
+!s32i = !cir.int<s, 32>
+!s64i = !cir.int<s, 64>
+
+!rec_Foo = !cir.struct<"Foo" {data !s32i}>
+!rec_Big = !cir.struct<"Big" {data !s64i, data !s64i}>
+
+module attributes {
+  cir.triple = "x86_64-unknown-windows-msvc",
+  dlti.dl_spec = #dlti.dl_spec<
+    #dlti.dl_entry<i32, dense<32>: vector<2xi64>>,
+    #dlti.dl_entry<i64, dense<64>: vector<2xi64>>>
+} {
+
+  // For C++ instance methods with indirect struct return, this is argument 0
+  // and sret pointer is inserted at argument 1 (sretAfterThis).
+  cir.func @method(%this: !cir.ptr<!rec_Foo>, %x: !s32i) -> !rec_Big
+      attributes { cir.instance_method } {
+    %0 = cir.alloca "__retval" align(8) : !cir.ptr<!rec_Big>
+    %z = cir.const #cir.zero : !rec_Big
+    cir.store %z, %0 : !rec_Big, !cir.ptr<!rec_Big>
+    %1 = cir.load %0 : !cir.ptr<!rec_Big>, !rec_Big
+    cir.return %1 : !rec_Big
+  }
+
+  // CHECK-LABEL: cir.func @method(
+  // CHECK-SAME:    %arg0: !cir.ptr<!rec_Foo>,
+  // CHECK-SAME:    %arg1: !cir.ptr<!rec_Big> {llvm.align = 8 : i64, llvm.dead_on_unwind, llvm.noalias, llvm.sret = !rec_Big, llvm.writable},
+  // CHECK-SAME:    %arg2: !s32i)
+  // CHECK-NOT:   -> !rec_Big
+  // CHECK:         %[[Z:.*]] = cir.const #cir.zero : !rec_Big
+  // CHECK:         cir.store %[[Z]], %arg1 : !rec_Big, !cir.ptr<!rec_Big>
+  // CHECK:         cir.return
+  // CHECK-NOT:     cir.return %{{.*}}
+
+  cir.func private @decl_method(%this: !cir.ptr<!rec_Foo>, %x: !s32i) -> !rec_Big
+      attributes { cir.instance_method }
+
+  // CHECK-LABEL: cir.func private @decl_method(
+  // CHECK-SAME:    !cir.ptr<!rec_Foo>,
+  // CHECK-SAME:    !cir.ptr<!rec_Big> {llvm.align = 8 : i64, llvm.dead_on_unwind, llvm.sret = !rec_Big, llvm.writable},
+  // CHECK-SAME:    !s32i)
+  // CHECK-NOT:   -> !rec_Big
+
+  // Call site: this is arg 0, sret pointer is arg 1, and x is arg 2.
+  cir.func @caller(%this: !cir.ptr<!rec_Foo>, %x: !s32i) {
+    %b = cir.alloca "b" align(8) : !cir.ptr<!rec_Big>
+    %0 = cir.call @method(%this, %x) : (!cir.ptr<!rec_Foo>, !s32i) -> !rec_Big
+    cir.store %0, %b : !rec_Big, !cir.ptr<!rec_Big>
+    cir.return
+  }
+
+  // CHECK-LABEL: cir.func @caller(
+  // CHECK-SAME:    %arg0: !cir.ptr<!rec_Foo>, %arg1: !s32i)
+  // CHECK:         %[[B:.*]] = cir.alloca "b" align(8) : !cir.ptr<!rec_Big>
+  // CHECK:         cir.call @method(%arg0, %[[B]], %arg1) : (!cir.ptr<!rec_Foo>, !cir.ptr<!rec_Big> {llvm.align = 8 : i64, llvm.dead_on_unwind, llvm.sret = !rec_Big, llvm.writable}, !s32i) -> ()
+  // CHECK:         cir.return
+}

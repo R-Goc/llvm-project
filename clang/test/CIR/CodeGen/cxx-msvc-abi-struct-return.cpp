@@ -26,7 +26,7 @@ struct Holder {
 };
 
 // Free function returning trivial <= 8-byte struct (direct return).
-// X64-LABEL: cir.func no_inline dso_local @"?ret_small_trivial@@YA?AUSmallTrivial@@XZ"() -> !rec_SmallTrivial
+// X64-LABEL: cir.func no_inline dso_local @"?ret_small_trivial@@YA?AUSmallTrivial@@XZ"() -> !u64i
 // X86-LABEL: cir.func no_inline dso_local @"?ret_small_trivial@@YA?AUSmallTrivial@@XZ"() -> !rec_SmallTrivial
 SmallTrivial ret_small_trivial() {
   return SmallTrivial{1, 2};
@@ -67,7 +67,7 @@ NonTrivial Holder::method_nontrivial() {
 // X86-LABEL: cir.func no_inline dso_local @"?test_calls@@YAXAAUHolder@@@Z"
 void test_calls(Holder &h) {
   // Direct call to free function returning <= 8-byte trivial struct:
-  // X64: %[[DIRECT:[0-9]+]] = cir.call @"?ret_small_trivial@@YA?AUSmallTrivial@@XZ"() : () -> !rec_SmallTrivial
+  // X64: %[[DIRECT:[0-9]+]] = cir.call @"?ret_small_trivial@@YA?AUSmallTrivial@@XZ"() : () -> !u64i
   // X86: %[[DIRECT:[0-9]+]] = cir.call @"?ret_small_trivial@@YA?AUSmallTrivial@@XZ"() : () -> !rec_SmallTrivial
   SmallTrivial s = ret_small_trivial();
 

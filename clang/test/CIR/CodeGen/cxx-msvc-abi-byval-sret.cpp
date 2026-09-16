@@ -1,4 +1,4 @@
-// RUN: %clang_cc1 -std=c++17 -triple x86_64-pc-windows-msvc -fclangir -emit-cir %s -o %t64.cir
+// RUN: %clang_cc1 -std=c++17 -triple x86_64-pc-windows-msvc -fclangir -fno-clangir-call-conv-lowering -emit-cir %s -o %t64.cir
 // RUN: FileCheck --input-file=%t64.cir %s -check-prefix=X64
 // RUN: %clang_cc1 -std=c++17 -triple i686-pc-windows-msvc -fclangir -emit-cir %s -o %t32.cir
 // RUN: FileCheck --input-file=%t32.cir %s -check-prefix=X86
@@ -27,7 +27,7 @@ struct B {
 // X64:         cir.cleanup.scope {
 // X64:           cir.yield
 // X64:         } cleanup normal {
-// X64:           cir.call @"??1A@@QEAA@XZ"(%[[A_ADDR]]) nothrow : (!cir.ptr<!rec_A>
+// X64:           cir.call @"??1A@@QEAA@XZ"(%[[A_ADDR]]) nothrow{{.*}} : (!cir.ptr<!rec_A>
 // X64:           cir.yield
 // X64:         }
 // X64:         cir.return
@@ -38,7 +38,7 @@ struct B {
 // X86:         cir.cleanup.scope {
 // X86:           cir.yield
 // X86:         } cleanup normal {
-// X86:           cir.call @"??1A@@QAE@XZ"(%[[A_ADDR]]) nothrow cc(x86_thiscall) : (!cir.ptr<!rec_A>
+// X86:           cir.call @"??1A@@QAE@XZ"(%[[A_ADDR]]) nothrow cc(x86_thiscall){{.*}} : (!cir.ptr<!rec_A>
 // X86:           cir.yield
 // X86:         }
 // X86:         cir.return
@@ -331,7 +331,7 @@ A S::method(A a) {
 // X64:           %[[LOAD_S:.*]] = cir.load %[[S_PTR]] : !cir.ptr<!cir.ptr<!rec_S>>, !cir.ptr<!rec_S>
 // X64:           cir.call @"??0A@@QEAA@AEBU0@@Z"(%[[TMP_A]], %[[LOCAL_A]])
 // X64:           %[[VAL_A:.*]] = cir.load align(4) %[[TMP_A]]
-// X64:           cir.call @"?method@S@@QEAA?AUA@@U2@@Z"(%[[LOAD_S]], %[[RESULT]], %[[VAL_A]]) : (!cir.ptr<!rec_S> {{.*}}, !cir.ptr<!rec_A>, !rec_A) -> ()
+// X64:           cir.call @"?method@S@@QEAA?AUA@@U2@@Z"(%[[LOAD_S]], %[[RESULT]], %[[VAL_A]]){{.*}} : (!cir.ptr<!rec_S> {{.*}}, !cir.ptr<!rec_A>, !rec_A) -> ()
 // X64:           cir.cleanup.scope {
 // X64:             cir.yield
 // X64:           } cleanup normal {
@@ -353,7 +353,7 @@ A S::method(A a) {
 // X86:           %[[LOAD_S:.*]] = cir.load %[[S_PTR]] : !cir.ptr<!cir.ptr<!rec_S>>, !cir.ptr<!rec_S>
 // X86:           cir.call @"??0A@@QAE@ABU0@@Z"(%[[TMP_A]], %[[LOCAL_A]]) cc(x86_thiscall)
 // X86:           %[[VAL_A:.*]] = cir.load align(4) %[[TMP_A]]
-// X86:           cir.call @"?method@S@@QAE?AUA@@U2@@Z"(%[[LOAD_S]], %[[RESULT]], %[[VAL_A]]) cc(x86_thiscall) : (!cir.ptr<!rec_S> {{.*}}, !cir.ptr<!rec_A>, !rec_A) -> ()
+// X86:           cir.call @"?method@S@@QAE?AUA@@U2@@Z"(%[[LOAD_S]], %[[RESULT]], %[[VAL_A]]) cc(x86_thiscall){{.*}} : (!cir.ptr<!rec_S> {{.*}}, !cir.ptr<!rec_A>, !rec_A) -> ()
 // X86:           cir.cleanup.scope {
 // X86:             cir.yield
 // X86:           } cleanup normal {
