@@ -914,14 +914,37 @@ LValue CIRGenFunction::emitLValueForLambdaField(const FieldDecl *field,
                                                 mlir::Value thisValue) {
   bool hasExplicitObjectParameter = false;
   const auto *methD = dyn_cast_if_present<CXXMethodDecl>(curCodeDecl);
-  LValue lambdaLV;
   if (methD) {
     hasExplicitObjectParameter = methD->isExplicitObjectMemberFunction();
     assert(methD->getParent()->isLambda());
     assert(methD->getParent() == field->getParent());
   }
+  LValue lambdaLV;
   if (hasExplicitObjectParameter) {
-    cgm.errorNYI(field->getSourceRange(), "ExplicitObjectMemberFunction");
+    const VarDecl *d = cast<CXXMethodDecl>(curCodeDecl)->getParamDecl(0);
+    auto it = localDeclMap.find(d);
+    assert(it != localDeclMap.end() && "explicit parameter not loaded?");
+    Address addrOfExplicitObject = it->getSecond();
+    if (d->getType()->isReferenceType())
+      lambdaLV = emitLoadOfReferenceLValue(
+          addrOfExplicitObject, getLoc(d->getSourceRange()), d->getType(),
+          AlignmentSource::Decl);
+    else
+      lambdaLV = makeAddrLValue(addrOfExplicitObject,
+                                d->getType().getNonReferenceType());
+
+    // Make sure we have an lvalue to the lambda itself and not a derived class.
+    auto *thisTy = d->getType().getNonReferenceType()->getAsCXXRecordDecl();
+    auto *lambdaTy = cast<CXXRecordDecl>(field->getParent());
+    if (thisTy != lambdaTy) {
+      const CXXCastPath &basePathArray = getContext().LambdaCastPaths.at(methD);
+      Address base = getAddressOfBaseClass(
+          lambdaLV.getAddress(), thisTy,
+          llvm::iterator_range<CastExpr::path_const_iterator>(basePathArray),
+          /*nullCheckValue=*/false, SourceLocation());
+      QualType t = getContext().getCanonicalTagType(lambdaTy);
+      lambdaLV = makeAddrLValue(base, t);
+    }
   } else {
     QualType lambdaTagType =
         getContext().getCanonicalTagType(field->getParent());

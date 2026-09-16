@@ -1476,11 +1476,6 @@ static bool canEmitDelegateCallArgs(CIRGenModule &cgm, ASTContext &ctx,
     return false;
 
   if (ctx.getTargetInfo().getCXXABI().areArgsDestroyedLeftToRightInCallee()) {
-    if (ctx.getTargetInfo().getTriple().getArch() == llvm::Triple::x86) {
-      cgm.errorNYI(d->getSourceRange(),
-                   "canEmitDelegateCallArgs: 32-bit x86 MSVC ABI");
-      return false;
-    }
     // If the parameters are callee-cleanup, it's not safe to forward.
     for (auto *p : d->parameters())
       if (p->needsDestruction(ctx))
@@ -1573,11 +1568,12 @@ void CIRGenFunction::emitInlinedInheritingCXXConstructorCall(
     }
   }
 
-  // FIXME(cir): it isn't clear what it takes to get here with a constructor?
-  // Leave as an NYI until we come across a reproducer.
+  // Create a return value slot if the ABI implementation wants one.
+  // FIXME: This is dumb, we should ask the ABI not to try to set the return
+  // value instead.
   if (!retTy->isVoidType())
-    cgm.errorNYI(d->getSourceRange(),
-                 "emitInlinedInheritingCXXConstructorCall: non-void return");
+    returnValue =
+        createMemTempWithoutCast(retTy, getLoc(loc), "retval.inhctor");
 
   cgm.getCXXABI().emitInstanceFunctionProlog(loc, *this);
   cxxThisValue = cxxabiThisValue;

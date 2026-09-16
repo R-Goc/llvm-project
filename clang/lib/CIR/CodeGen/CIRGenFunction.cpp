@@ -655,12 +655,14 @@ void CIRGenFunction::startFunction(GlobalDecl gd, QualType returnType,
   // parameter) receive an implicit `this` argument that the CXXABI prolog has
   // to set up. C++23 explicit-object members (P0847R7) carry their object via a
   // regular parameter and use the standard parameter prolog instead.
-  if (isa_and_nonnull<CXXMethodDecl>(d) &&
-      cast<CXXMethodDecl>(d)->isImplicitObjectMemberFunction()) {
-    cgm.getCXXABI().emitInstanceFunctionProlog(loc, *this);
+  if (const auto *md = dyn_cast_if_present<CXXMethodDecl>(d);
+      md && !md->isStatic()) {
+    bool isInLambda =
+        md->getParent()->isLambda() && md->getOverloadedOperator() == OO_Call;
+    if (md->isImplicitObjectMemberFunction())
+      cgm.getCXXABI().emitInstanceFunctionProlog(loc, *this);
 
-    const auto *md = cast<CXXMethodDecl>(d);
-    if (md->getParent()->isLambda() && md->getOverloadedOperator() == OO_Call) {
+    if (isInLambda) {
       // We're in a lambda.
       auto fn = dyn_cast<cir::FuncOp>(curFn);
       assert(fn && "lambda in non-function region");

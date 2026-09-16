@@ -1138,7 +1138,7 @@ CIRGenTypes::arrangeUnprototypedMustTailThunk(const CXXMethodDecl *md) {
 const CIRGenFunctionInfo &
 CIRGenTypes::arrangeFunctionDeclaration(const FunctionDecl *fd) {
   if (const auto *md = dyn_cast<CXXMethodDecl>(fd))
-    if (md->isInstance())
+    if (md->isImplicitObjectMemberFunction())
       return arrangeCXXMethodDeclaration(md);
 
   CanQualType funcTy = fd->getType()->getCanonicalTypeUnqualified();
