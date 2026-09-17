@@ -1397,53 +1397,62 @@ CIRGenMicrosoftCXXABI::buildVirtualMethodAttr(cir::MethodType methodTy,
   auto thunkFuncOp = cgm.getModule().lookupSymbol<cir::FuncOp>(thunkName);
   if (!thunkFuncOp) {
     mlir::Location loc = cgm.getLoc(md->getLocation());
-    cir::FuncType thunkTy = methodTy.getMemberFuncTy();
+    const CIRGenFunctionInfo &thunkFnInfo =
+        cgm.getTypes().arrangeUnprototypedMustTailThunk(md);
+    cir::FuncType thunkTy = cgm.getTypes().getFunctionType(thunkFnInfo);
+
+    thunkFuncOp = cgm.createCIRFunction(loc, thunkName, thunkTy, md);
+    thunkFuncOp.setLinkage(md->isExternallyVisible()
+                               ? cir::GlobalLinkageKind::LinkOnceODRLinkage
+                               : cir::GlobalLinkageKind::InternalLinkage);
+    thunkFuncOp.setVisibility(md->isExternallyVisible()
+                                  ? mlir::SymbolTable::Visibility::Public
+                                  : mlir::SymbolTable::Visibility::Private);
+    if (md->isExternallyVisible() && cgm.supportsCOMDAT())
+      thunkFuncOp.setComdat(true);
+
+    cgm.setGVProperties(thunkFuncOp, md);
+    if (!exportThunk())
+      cgm.setDSOLocal(static_cast<mlir::Operation *>(thunkFuncOp));
+
+    cgm.setCIRFunctionAttributes(GlobalDecl(md), thunkFnInfo, thunkFuncOp,
+                                 /*isThunk=*/false);
+    cgm.setCIRFunctionAttributesForDefinition(md, thunkFuncOp);
+    thunkFuncOp->setAttr("thunk",
+                         mlir::UnitAttr::get(cgm.getBuilder().getContext()));
+
     mlir::OpBuilder::InsertionGuard guard(cgm.getBuilder());
-    cgm.getBuilder().setInsertionPointToEnd(cgm.getModule().getBody());
-    thunkFuncOp =
-        cir::FuncOp::create(cgm.getBuilder(), loc, thunkName, thunkTy);
-    thunkFuncOp.setLinkage(cir::GlobalLinkageKind::LinkOnceODRLinkage);
-    thunkFuncOp.setVisibility(mlir::SymbolTable::Visibility::Public);
+    CIRGenFunction cgf(cgm, cgm.getBuilder());
+    cgf.curFn = thunkFuncOp;
+    cgf.curFnInfo = &thunkFnInfo;
+    cgf.curGD = GlobalDecl(md);
+    cgf.curFuncDecl = md;
 
     mlir::Block *entryBlock = thunkFuncOp.addEntryBlock();
-    cgm.getBuilder().setInsertionPointToStart(entryBlock);
+    cgf.getBuilder().setInsertionPointToStart(entryBlock);
     mlir::Value thisVal = entryBlock->getArgument(0);
 
-    auto voidPtrTy = cgm.getBuilder().getVoidPtrTy();
-    auto voidPtrPtrTy = cgm.getBuilder().getPointerTo(voidPtrTy);
+    auto voidPtrTy = cgf.getBuilder().getVoidPtrTy();
+    auto voidPtrPtrTy = cgf.getBuilder().getPointerTo(voidPtrTy);
     mlir::Value thisVoidPtrPtr =
-        cgm.getBuilder().createBitcast(loc, thisVal, voidPtrPtrTy);
+        cgf.getBuilder().createBitcast(loc, thisVal, voidPtrPtrTy);
     mlir::Value vtablePtr =
-        cgm.getBuilder().createAlignedLoad(loc, voidPtrTy, thisVoidPtrPtr);
+        cgf.getBuilder().createAlignedLoad(loc, voidPtrTy, thisVoidPtrPtr);
 
-    mlir::Value slotOffset = cgm.getBuilder().getConstantInt(
-        loc, cgm.getBuilder().getUInt64Ty(), ml.Index);
+    mlir::Value slotOffset = cgf.getBuilder().getConstantInt(
+        loc, cgf.getBuilder().getUInt64Ty(), ml.Index);
     mlir::Value vfnSlotPtr = cir::PtrStrideOp::create(
-        cgm.getBuilder(), loc, voidPtrTy, vtablePtr, slotOffset);
+        cgf.getBuilder(), loc, voidPtrTy, vtablePtr, slotOffset);
     mlir::Value vfnSlotPtrPtr =
-        cgm.getBuilder().createBitcast(loc, vfnSlotPtr, voidPtrPtrTy);
+        cgf.getBuilder().createBitcast(loc, vfnSlotPtr, voidPtrPtrTy);
     mlir::Value calleeFnPtr =
-        cgm.getBuilder().createAlignedLoad(loc, voidPtrTy, vfnSlotPtrPtr);
+        cgf.getBuilder().createAlignedLoad(loc, voidPtrTy, vfnSlotPtrPtr);
 
-    auto fnPtrTy = cgm.getBuilder().getPointerTo(thunkTy);
+    auto fnPtrTy = cgf.getBuilder().getPointerTo(thunkTy);
     mlir::Value calleeTyped =
-        cgm.getBuilder().createBitcast(loc, calleeFnPtr, fnPtrTy);
+        cgf.getBuilder().createBitcast(loc, calleeFnPtr, fnPtrTy);
 
-    llvm::SmallVector<mlir::Value> operands;
-    operands.push_back(calleeTyped);
-    operands.append(entryBlock->getArguments().begin(),
-                    entryBlock->getArguments().end());
-
-    if (mlir::isa<cir::VoidType>(thunkTy.getReturnType())) {
-      cir::CallOp::create(cgm.getBuilder(), loc, mlir::SymbolRefAttr{},
-                          thunkTy.getReturnType(), operands);
-      cir::ReturnOp::create(cgm.getBuilder(), loc);
-    } else {
-      auto callOp =
-          cir::CallOp::create(cgm.getBuilder(), loc, mlir::SymbolRefAttr{},
-                              thunkTy.getReturnType(), operands);
-      cir::ReturnOp::create(cgm.getBuilder(), loc, callOp.getResult());
-    }
+    cgf.emitMustTailThunk(GlobalDecl(md), thisVal, calleeTyped, thunkTy);
   }
 
   return cgm.getBuilder().getMethodAttr(methodTy, thunkFuncOp);
