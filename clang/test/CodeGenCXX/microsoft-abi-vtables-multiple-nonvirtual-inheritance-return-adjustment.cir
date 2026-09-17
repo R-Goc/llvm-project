@@ -1,0 +1,301 @@
+!rec_pr204443A3AA = !cir.struct<"pr20444::A" {data !cir.vptr}>
+!rec_pr204443A3AB = !cir.struct<"pr20444::B" {data !cir.vptr}>
+!rec_test13A3AA = !cir.struct<"test1::A" {data !cir.vptr}>
+!rec_test13A3AB = !cir.struct<"test1::B" {data !cir.vptr}>
+!rec_test13A3AD = !cir.struct<"test1::D" {data !cir.vptr}>
+!rec_test23A3AA = !cir.struct<"test2::A" {data !cir.vptr}>
+!rec_test23A3AB = !cir.struct<"test2::B" {data !cir.vptr}>
+!rec_test23A3AD = !cir.struct<"test2::D" {data !cir.vptr}>
+!rec_test33A3AA = !cir.struct<"test3::A" {data !cir.vptr}>
+!rec_test33A3AB = !cir.struct<"test3::B" {data !cir.vptr}>
+!rec_test33A3AD = !cir.struct<"test3::D" {data !cir.vptr}>
+!rec_test43A3AA = !cir.struct<"test4::A" {data !cir.vptr}>
+!rec_test43A3AB = !cir.struct<"test4::B" {data !cir.vptr}>
+!rec_test43A3AD = !cir.struct<"test4::D" {data !cir.vptr}>
+!rec_test53A3AA = !cir.struct<"test5::A" {data !cir.vptr}>
+!rec_test53A3AB = !cir.struct<"test5::B" {data !cir.vptr}>
+!rec_test53A3AD = !cir.struct<"test5::D" {data !cir.vptr}>
+!rec_test63A3AA = !cir.struct<"test6::A" {data !cir.vptr}>
+!rec_test63A3AB = !cir.struct<"test6::B" {data !cir.vptr}>
+!rec_test63A3AD = !cir.struct<"test6::D" {data !cir.vptr}>
+!rec_test73A3AA = !cir.struct<"test7::A" {data !cir.vptr}>
+!rec_test73A3AB = !cir.struct<"test7::B" {data !cir.vptr}>
+!s32i = !cir.int<s, 32>
+!u8i = !cir.int<u, 8>
+!void = !cir.void
+#loc6 = loc("e:\\lib\\llvm\\clang\\test\\CodeGenCXX\\microsoft-abi-vtables-multiple-nonvirtual-inheritance-return-adjustment.cpp":44:20)
+#loc7 = loc("e:\\lib\\llvm\\clang\\test\\CodeGenCXX\\microsoft-abi-vtables-multiple-nonvirtual-inheritance-return-adjustment.cpp":44:23)
+#loc13 = loc("e:\\lib\\llvm\\clang\\test\\CodeGenCXX\\microsoft-abi-vtables-multiple-nonvirtual-inheritance-return-adjustment.cpp":90:20)
+#loc14 = loc("e:\\lib\\llvm\\clang\\test\\CodeGenCXX\\microsoft-abi-vtables-multiple-nonvirtual-inheritance-return-adjustment.cpp":90:23)
+#loc20 = loc("e:\\lib\\llvm\\clang\\test\\CodeGenCXX\\microsoft-abi-vtables-multiple-nonvirtual-inheritance-return-adjustment.cpp":137:20)
+#loc21 = loc("e:\\lib\\llvm\\clang\\test\\CodeGenCXX\\microsoft-abi-vtables-multiple-nonvirtual-inheritance-return-adjustment.cpp":137:23)
+#loc27 = loc("e:\\lib\\llvm\\clang\\test\\CodeGenCXX\\microsoft-abi-vtables-multiple-nonvirtual-inheritance-return-adjustment.cpp":201:20)
+#loc28 = loc("e:\\lib\\llvm\\clang\\test\\CodeGenCXX\\microsoft-abi-vtables-multiple-nonvirtual-inheritance-return-adjustment.cpp":201:23)
+#loc34 = loc("e:\\lib\\llvm\\clang\\test\\CodeGenCXX\\microsoft-abi-vtables-multiple-nonvirtual-inheritance-return-adjustment.cpp":244:20)
+#loc35 = loc("e:\\lib\\llvm\\clang\\test\\CodeGenCXX\\microsoft-abi-vtables-multiple-nonvirtual-inheritance-return-adjustment.cpp":244:23)
+#loc42 = loc("e:\\lib\\llvm\\clang\\test\\CodeGenCXX\\microsoft-abi-vtables-multiple-nonvirtual-inheritance-return-adjustment.cpp":296:20)
+#loc43 = loc("e:\\lib\\llvm\\clang\\test\\CodeGenCXX\\microsoft-abi-vtables-multiple-nonvirtual-inheritance-return-adjustment.cpp":296:23)
+#loc50 = loc("e:\\lib\\llvm\\clang\\test\\CodeGenCXX\\microsoft-abi-vtables-multiple-nonvirtual-inheritance-return-adjustment.cpp":320:20)
+#loc51 = loc("e:\\lib\\llvm\\clang\\test\\CodeGenCXX\\microsoft-abi-vtables-multiple-nonvirtual-inheritance-return-adjustment.cpp":320:23)
+#loc57 = loc("e:\\lib\\llvm\\clang\\test\\CodeGenCXX\\microsoft-abi-vtables-multiple-nonvirtual-inheritance-return-adjustment.cpp":344:20)
+#loc58 = loc("e:\\lib\\llvm\\clang\\test\\CodeGenCXX\\microsoft-abi-vtables-multiple-nonvirtual-inheritance-return-adjustment.cpp":344:23)
+#loc64 = loc("e:\\lib\\llvm\\clang\\test\\CodeGenCXX\\microsoft-abi-vtables-multiple-nonvirtual-inheritance-return-adjustment.cpp":363:20)
+#loc65 = loc("e:\\lib\\llvm\\clang\\test\\CodeGenCXX\\microsoft-abi-vtables-multiple-nonvirtual-inheritance-return-adjustment.cpp":363:23)
+#loc71 = loc("e:\\lib\\llvm\\clang\\test\\CodeGenCXX\\microsoft-abi-vtables-multiple-nonvirtual-inheritance-return-adjustment.cpp":41:14)
+!rec_pr204443A3AC = !cir.struct<"pr20444::C" {data !rec_pr204443A3AA, data !rec_pr204443A3AB}>
+!rec_test13A3AC = !cir.struct<"test1::C" {data !rec_test13A3AA, data !rec_test13A3AB}>
+!rec_test13A3AX = !cir.struct<"test1::X" {data !rec_test13A3AD}>
+!rec_test23A3AC = !cir.struct<"test2::C" {data !rec_test23A3AA, data !rec_test23A3AB}>
+!rec_test23A3AE = !cir.struct<"test2::E" {data !rec_test23A3AD}>
+!rec_test33A3AC = !cir.struct<"test3::C" {data !rec_test33A3AA, data !rec_test33A3AB}>
+!rec_test33A3AE = !cir.struct<"test3::E" {data !rec_test33A3AD}>
+!rec_test43A3AC = !cir.struct<"test4::C" {data !rec_test43A3AA, data !rec_test43A3AB}>
+!rec_test43A3AE = !cir.struct<"test4::E" {data !rec_test43A3AD}>
+!rec_test53A3AC = !cir.struct<"test5::C" {data !rec_test53A3AA, data !rec_test53A3AB}>
+!rec_test53A3AX = !cir.struct<"test5::X" {data !rec_test53A3AA, data !rec_test53A3AD}>
+!rec_test63A3AC = !cir.struct<"test6::C" {data !rec_test63A3AA, data !rec_test63A3AB}>
+!rec_test63A3AE = !cir.struct<"test6::E" {data !rec_test63A3AA, data !rec_test63A3AD}>
+!rec_test73A3AC = !cir.struct<"test7::C" {data !rec_test73A3AB, data !rec_test73A3AA}>
+#loc78 = loc(fused[#loc6, #loc7])
+#loc81 = loc(fused[#loc13, #loc14])
+#loc84 = loc(fused[#loc20, #loc21])
+#loc87 = loc(fused[#loc27, #loc28])
+#loc90 = loc(fused[#loc34, #loc35])
+#loc93 = loc(fused[#loc42, #loc43])
+#loc96 = loc(fused[#loc50, #loc51])
+#loc99 = loc(fused[#loc57, #loc58])
+#loc102 = loc(fused[#loc64, #loc65])
+!rec_pr204443A3AD = !cir.struct<"pr20444::D" {data !rec_pr204443A3AC}>
+!rec_test23A3AF = !cir.struct<"test2::F" {data !rec_test23A3AC}>
+!rec_test23A3AX = !cir.struct<"test2::X" {data !rec_test23A3AE}>
+!rec_test33A3AF = !cir.struct<"test3::F" {data !rec_test33A3AA, data !rec_test33A3AC}>
+!rec_test33A3AX = !cir.struct<"test3::X" {data !rec_test33A3AE}>
+!rec_test43A3AF = !cir.struct<"test4::F" {data !rec_test43A3AA, data !rec_test43A3AC}>
+!rec_test43A3AX = !cir.struct<"test4::X" {data !rec_test43A3AD, data !rec_test43A3AE}>
+!rec_test63A3AF = !cir.struct<"test6::F" {data !rec_test63A3AA, data !rec_test63A3AC}>
+!rec_test63A3AX = !cir.struct<"test6::X" {data !rec_test63A3AE}>
+!rec_anon_struct = !cir.struct<{data !cir.array<!cir.ptr<!u8i> x 4>}>
+module @"E:\\lib\\llvm\\clang\\test\\CodeGenCXX\\microsoft-abi-vtables-multiple-nonvirtual-inheritance-return-adjustment.cpp" attributes {cir.default_tls_model = #cir.tls_model<tls_dyn>, cir.int_type_width = 32 : i32, cir.lang = #cir.lang<cxx>, cir.module_asm = [], cir.record_layouts = {"pr20444::A" = #cir.record_layout<arg_passing_kind = cannot_pass_in_regs, has_trivial_dtor = true, record_align = 4>, "pr20444::B" = #cir.record_layout<arg_passing_kind = cannot_pass_in_regs, has_trivial_dtor = true, record_align = 4>, "pr20444::C" = #cir.record_layout<arg_passing_kind = cannot_pass_in_regs, has_trivial_dtor = true, record_align = 4>, "pr20444::D" = #cir.record_layout<arg_passing_kind = cannot_pass_in_regs, has_trivial_dtor = true, record_align = 4>, "test1::A" = #cir.record_layout<arg_passing_kind = cannot_pass_in_regs, has_trivial_dtor = true, record_align = 4>, "test1::B" = #cir.record_layout<arg_passing_kind = cannot_pass_in_regs, has_trivial_dtor = true, record_align = 4>, "test1::C" = #cir.record_layout<arg_passing_kind = cannot_pass_in_regs, has_trivial_dtor = true, record_align = 4>, "test1::D" = #cir.record_layout<arg_passing_kind = cannot_pass_in_regs, has_trivial_dtor = true, record_align = 4>, "test1::X" = #cir.record_layout<arg_passing_kind = cannot_pass_in_regs, has_trivial_dtor = true, record_align = 4>, "test2::A" = #cir.record_layout<arg_passing_kind = cannot_pass_in_regs, has_trivial_dtor = true, record_align = 4>, "test2::B" = #cir.record_layout<arg_passing_kind = cannot_pass_in_regs, has_trivial_dtor = true, record_align = 4>, "test2::C" = #cir.record_layout<arg_passing_kind = cannot_pass_in_regs, has_trivial_dtor = true, record_align = 4>, "test2::D" = #cir.record_layout<arg_passing_kind = cannot_pass_in_regs, has_trivial_dtor = true, record_align = 4>, "test2::E" = #cir.record_layout<arg_passing_kind = cannot_pass_in_regs, has_trivial_dtor = true, record_align = 4>, "test2::F" = #cir.record_layout<arg_passing_kind = cannot_pass_in_regs, has_trivial_dtor = true, record_align = 4>, "test2::X" = #cir.record_layout<arg_passing_kind = cannot_pass_in_regs, has_trivial_dtor = true, record_align = 4>, "test3::A" = #cir.record_layout<arg_passing_kind = cannot_pass_in_regs, has_trivial_dtor = true, record_align = 4>, "test3::B" = #cir.record_layout<arg_passing_kind = cannot_pass_in_regs, has_trivial_dtor = true, record_align = 4>, "test3::C" = #cir.record_layout<arg_passing_kind = cannot_pass_in_regs, has_trivial_dtor = true, record_align = 4>, "test3::D" = #cir.record_layout<arg_passing_kind = cannot_pass_in_regs, has_trivial_dtor = true, record_align = 4>, "test3::E" = #cir.record_layout<arg_passing_kind = cannot_pass_in_regs, has_trivial_dtor = true, record_align = 4>, "test3::F" = #cir.record_layout<arg_passing_kind = cannot_pass_in_regs, has_trivial_dtor = true, record_align = 4>, "test3::X" = #cir.record_layout<arg_passing_kind = cannot_pass_in_regs, has_trivial_dtor = true, record_align = 4>, "test4::A" = #cir.record_layout<arg_passing_kind = cannot_pass_in_regs, has_trivial_dtor = true, record_align = 4>, "test4::B" = #cir.record_layout<arg_passing_kind = cannot_pass_in_regs, has_trivial_dtor = true, record_align = 4>, "test4::C" = #cir.record_layout<arg_passing_kind = cannot_pass_in_regs, has_trivial_dtor = true, record_align = 4>, "test4::D" = #cir.record_layout<arg_passing_kind = cannot_pass_in_regs, has_trivial_dtor = true, record_align = 4>, "test4::E" = #cir.record_layout<arg_passing_kind = cannot_pass_in_regs, has_trivial_dtor = true, record_align = 4>, "test4::F" = #cir.record_layout<arg_passing_kind = cannot_pass_in_regs, has_trivial_dtor = true, record_align = 4>, "test4::X" = #cir.record_layout<arg_passing_kind = cannot_pass_in_regs, has_trivial_dtor = true, record_align = 4>, "test5::A" = #cir.record_layout<arg_passing_kind = cannot_pass_in_regs, has_trivial_dtor = true, record_align = 4>, "test5::B" = #cir.record_layout<arg_passing_kind = cannot_pass_in_regs, has_trivial_dtor = true, record_align = 4>, "test5::C" = #cir.record_layout<arg_passing_kind = cannot_pass_in_regs, has_trivial_dtor = true, record_align = 4>, "test5::D" = #cir.record_layout<arg_passing_kind = cannot_pass_in_regs, has_trivial_dtor = true, record_align = 4>, "test5::X" = #cir.record_layout<arg_passing_kind = cannot_pass_in_regs, has_trivial_dtor = true, record_align = 4>, "test6::A" = #cir.record_layout<arg_passing_kind = cannot_pass_in_regs, has_trivial_dtor = true, record_align = 4>, "test6::B" = #cir.record_layout<arg_passing_kind = cannot_pass_in_regs, has_trivial_dtor = true, record_align = 4>, "test6::C" = #cir.record_layout<arg_passing_kind = cannot_pass_in_regs, has_trivial_dtor = true, record_align = 4>, "test6::D" = #cir.record_layout<arg_passing_kind = cannot_pass_in_regs, has_trivial_dtor = true, record_align = 4>, "test6::E" = #cir.record_layout<arg_passing_kind = cannot_pass_in_regs, has_trivial_dtor = true, record_align = 4>, "test6::F" = #cir.record_layout<arg_passing_kind = cannot_pass_in_regs, has_trivial_dtor = true, record_align = 4>, "test6::X" = #cir.record_layout<arg_passing_kind = cannot_pass_in_regs, has_trivial_dtor = true, record_align = 4>, "test7::A" = #cir.record_layout<arg_passing_kind = cannot_pass_in_regs, has_trivial_dtor = true, record_align = 4>, "test7::B" = #cir.record_layout<arg_passing_kind = cannot_pass_in_regs, has_trivial_dtor = true, record_align = 4>, "test7::C" = #cir.record_layout<arg_passing_kind = cannot_pass_in_regs, has_trivial_dtor = true, record_align = 4>}, cir.size_type_width = 32 : i32, cir.triple = "i386-pc-windows-msvc", dlti.dl_spec = #dlti.dl_spec<!llvm.ptr = dense<32> : vector<4xi64>, !llvm.ptr<270> = dense<32> : vector<4xi64>, !llvm.ptr<271> = dense<32> : vector<4xi64>, !llvm.ptr<272> = dense<64> : vector<4xi64>, i64 = dense<64> : vector<2xi64>, i128 = dense<128> : vector<2xi64>, f80 = dense<128> : vector<2xi64>, i1 = dense<8> : vector<2xi64>, i8 = dense<8> : vector<2xi64>, i16 = dense<16> : vector<2xi64>, i32 = dense<32> : vector<2xi64>, f16 = dense<16> : vector<2xi64>, f64 = dense<64> : vector<2xi64>, f128 = dense<128> : vector<2xi64>, "dlti.endianness" = "little", "dlti.mangling_mode" = "x", "dlti.legal_int_widths" = array<i32: 8, 16, 32>, "dlti.stack_alignment" = 32 : i64, !cir.ptr<!cir.void> = #cir.ptr_spec<size = 32, abi = 32, preferred = 32, index = 32>>} {
+  cir.global "private" constant linkonce_odr comdat dso_local @"??_7X@test1@@6B@" = #cir.vtable<{#cir.const_array<[#cir.global_view<@"??_R0?AUX@test1@@@8"> : !cir.ptr<!void>, #cir.global_view<@"?foo@X@test1@@QAEPAUB@2@XZ"> : !cir.ptr<!u8i>, #cir.global_view<@"?z@D@test1@@UAEXXZ"> : !cir.ptr<!u8i>, #cir.global_view<@"?foo@X@test1@@UAEPAUC@2@XZ"> : !cir.ptr<!u8i>]> : !cir.array<!cir.ptr<!u8i> x 4>}> : !rec_anon_struct loc(#loc1)
+  cir.global external dso_local @"?x@test1@@3UX@1@A" = #cir.const_record<{#cir.const_record<{#cir.global_view<@"??_7X@test1@@6B@", [0 : i32, 0 : i32]> : !cir.vptr}> : !rec_test13A3AD}> : !rec_test13A3AX {alignment = 4 : i64} loc(#loc76)
+  cir.global "private" constant external @"??_R0?AUX@test1@@@8" : !cir.ptr<!void> loc(#loc1)
+  cir.func no_inline dso_local @"?build_vftable@test1@@YAXPAUX@1@@Z"(%arg0: !cir.ptr<!rec_test13A3AX> {llvm.noundef} loc(fused[#loc6, #loc7])) attributes {"cir.target-features" = "+cx8,+x87", nothrow} {
+    %0 = cir.alloca "obj" align(4) init : !cir.ptr<!cir.ptr<!rec_test13A3AX>> loc(#loc78)
+    cir.store %arg0, %0 : !cir.ptr<!rec_test13A3AX>, !cir.ptr<!cir.ptr<!rec_test13A3AX>> loc(#loc8)
+    %1 = cir.load align(4) %0 : !cir.ptr<!cir.ptr<!rec_test13A3AX>>, !cir.ptr<!rec_test13A3AX> loc(#loc9)
+    %2 = cir.vtable.get_vptr %1 : !cir.ptr<!rec_test13A3AX> -> !cir.ptr<!cir.vptr> loc(#loc9)
+    %3 = cir.load align(4) %2 : !cir.ptr<!cir.vptr>, !cir.vptr loc(#loc9)
+    %4 = cir.vtable.get_virtual_fn_addr %3[2] : !cir.vptr -> !cir.ptr<!cir.ptr<!cir.func<(!cir.ptr<!rec_test13A3AX>) -> !cir.ptr<!rec_test13A3AC>>>> loc(#loc9)
+    %5 = cir.load align(4) %4 : !cir.ptr<!cir.ptr<!cir.func<(!cir.ptr<!rec_test13A3AX>) -> !cir.ptr<!rec_test13A3AC>>>>, !cir.ptr<!cir.func<(!cir.ptr<!rec_test13A3AX>) -> !cir.ptr<!rec_test13A3AC>>> loc(#loc9)
+    %6 = cir.call %5(%1) cc(x86_thiscall) : (!cir.ptr<!cir.func<(!cir.ptr<!rec_test13A3AX>) -> !cir.ptr<!rec_test13A3AC>>>, !cir.ptr<!rec_test13A3AX> {llvm.align = 4 : i64, llvm.dereferenceable = 4 : i64, llvm.nonnull, llvm.noundef}) -> (!cir.ptr<!rec_test13A3AC> {llvm.noundef}) loc(#loc79)
+    cir.return loc(#loc5)
+  } loc(#loc77)
+  cir.func no_inline dso_local @"?build_vftable@test2@@YAXPAUX@1@@Z"(%arg0: !cir.ptr<!rec_test23A3AX> {llvm.noundef} loc(fused[#loc13, #loc14])) attributes {"cir.target-features" = "+cx8,+x87", nothrow} {
+    %0 = cir.alloca "obj" align(4) init : !cir.ptr<!cir.ptr<!rec_test23A3AX>> loc(#loc81)
+    cir.store %arg0, %0 : !cir.ptr<!rec_test23A3AX>, !cir.ptr<!cir.ptr<!rec_test23A3AX>> loc(#loc15)
+    %1 = cir.load align(4) %0 : !cir.ptr<!cir.ptr<!rec_test23A3AX>>, !cir.ptr<!rec_test23A3AX> loc(#loc16)
+    %2 = cir.vtable.get_vptr %1 : !cir.ptr<!rec_test23A3AX> -> !cir.ptr<!cir.vptr> loc(#loc16)
+    %3 = cir.load align(4) %2 : !cir.ptr<!cir.vptr>, !cir.vptr loc(#loc16)
+    %4 = cir.vtable.get_virtual_fn_addr %3[3] : !cir.vptr -> !cir.ptr<!cir.ptr<!cir.func<(!cir.ptr<!rec_test23A3AX>) -> !cir.ptr<!rec_test23A3AF>>>> loc(#loc16)
+    %5 = cir.load align(4) %4 : !cir.ptr<!cir.ptr<!cir.func<(!cir.ptr<!rec_test23A3AX>) -> !cir.ptr<!rec_test23A3AF>>>>, !cir.ptr<!cir.func<(!cir.ptr<!rec_test23A3AX>) -> !cir.ptr<!rec_test23A3AF>>> loc(#loc16)
+    %6 = cir.call %5(%1) cc(x86_thiscall) : (!cir.ptr<!cir.func<(!cir.ptr<!rec_test23A3AX>) -> !cir.ptr<!rec_test23A3AF>>>, !cir.ptr<!rec_test23A3AX> {llvm.align = 4 : i64, llvm.dereferenceable = 4 : i64, llvm.nonnull, llvm.noundef}) -> (!cir.ptr<!rec_test23A3AF> {llvm.noundef}) loc(#loc82)
+    cir.return loc(#loc12)
+  } loc(#loc80)
+  cir.func no_inline dso_local @"?build_vftable@test3@@YAXPAUX@1@@Z"(%arg0: !cir.ptr<!rec_test33A3AX> {llvm.noundef} loc(fused[#loc20, #loc21])) attributes {"cir.target-features" = "+cx8,+x87", nothrow} {
+    %0 = cir.alloca "obj" align(4) init : !cir.ptr<!cir.ptr<!rec_test33A3AX>> loc(#loc84)
+    cir.store %arg0, %0 : !cir.ptr<!rec_test33A3AX>, !cir.ptr<!cir.ptr<!rec_test33A3AX>> loc(#loc22)
+    %1 = cir.load align(4) %0 : !cir.ptr<!cir.ptr<!rec_test33A3AX>>, !cir.ptr<!rec_test33A3AX> loc(#loc23)
+    %2 = cir.vtable.get_vptr %1 : !cir.ptr<!rec_test33A3AX> -> !cir.ptr<!cir.vptr> loc(#loc23)
+    %3 = cir.load align(4) %2 : !cir.ptr<!cir.vptr>, !cir.vptr loc(#loc23)
+    %4 = cir.vtable.get_virtual_fn_addr %3[3] : !cir.vptr -> !cir.ptr<!cir.ptr<!cir.func<(!cir.ptr<!rec_test33A3AX>) -> !cir.ptr<!rec_test33A3AF>>>> loc(#loc23)
+    %5 = cir.load align(4) %4 : !cir.ptr<!cir.ptr<!cir.func<(!cir.ptr<!rec_test33A3AX>) -> !cir.ptr<!rec_test33A3AF>>>>, !cir.ptr<!cir.func<(!cir.ptr<!rec_test33A3AX>) -> !cir.ptr<!rec_test33A3AF>>> loc(#loc23)
+    %6 = cir.call %5(%1) cc(x86_thiscall) : (!cir.ptr<!cir.func<(!cir.ptr<!rec_test33A3AX>) -> !cir.ptr<!rec_test33A3AF>>>, !cir.ptr<!rec_test33A3AX> {llvm.align = 4 : i64, llvm.dereferenceable = 4 : i64, llvm.nonnull, llvm.noundef}) -> (!cir.ptr<!rec_test33A3AF> {llvm.noundef}) loc(#loc85)
+    cir.return loc(#loc19)
+  } loc(#loc83)
+  cir.func no_inline dso_local @"?build_vftable@test4@@YAXPAUX@1@@Z"(%arg0: !cir.ptr<!rec_test43A3AX> {llvm.noundef} loc(fused[#loc27, #loc28])) attributes {"cir.target-features" = "+cx8,+x87", nothrow} {
+    %0 = cir.alloca "obj" align(4) init : !cir.ptr<!cir.ptr<!rec_test43A3AX>> loc(#loc87)
+    cir.store %arg0, %0 : !cir.ptr<!rec_test43A3AX>, !cir.ptr<!cir.ptr<!rec_test43A3AX>> loc(#loc29)
+    %1 = cir.load align(4) %0 : !cir.ptr<!cir.ptr<!rec_test43A3AX>>, !cir.ptr<!rec_test43A3AX> loc(#loc30)
+    %2 = cir.vtable.get_vptr %1 : !cir.ptr<!rec_test43A3AX> -> !cir.ptr<!cir.vptr> loc(#loc30)
+    %3 = cir.load align(4) %2 : !cir.ptr<!cir.vptr>, !cir.vptr loc(#loc30)
+    %4 = cir.vtable.get_virtual_fn_addr %3[2] : !cir.vptr -> !cir.ptr<!cir.ptr<!cir.func<(!cir.ptr<!rec_test43A3AX>) -> !cir.ptr<!rec_test43A3AF>>>> loc(#loc30)
+    %5 = cir.load align(4) %4 : !cir.ptr<!cir.ptr<!cir.func<(!cir.ptr<!rec_test43A3AX>) -> !cir.ptr<!rec_test43A3AF>>>>, !cir.ptr<!cir.func<(!cir.ptr<!rec_test43A3AX>) -> !cir.ptr<!rec_test43A3AF>>> loc(#loc30)
+    %6 = cir.call %5(%1) cc(x86_thiscall) : (!cir.ptr<!cir.func<(!cir.ptr<!rec_test43A3AX>) -> !cir.ptr<!rec_test43A3AF>>>, !cir.ptr<!rec_test43A3AX> {llvm.align = 4 : i64, llvm.dereferenceable = 8 : i64, llvm.nonnull, llvm.noundef}) -> (!cir.ptr<!rec_test43A3AF> {llvm.noundef}) loc(#loc88)
+    cir.return loc(#loc26)
+  } loc(#loc86)
+  cir.func no_inline dso_local @"?build_vftable@test5@@YAXPAUX@1@@Z"(%arg0: !cir.ptr<!rec_test53A3AX> {llvm.noundef} loc(fused[#loc34, #loc35])) attributes {"cir.target-features" = "+cx8,+x87", nothrow} {
+    %0 = cir.alloca "obj" align(4) init : !cir.ptr<!cir.ptr<!rec_test53A3AX>> loc(#loc90)
+    cir.store %arg0, %0 : !cir.ptr<!rec_test53A3AX>, !cir.ptr<!cir.ptr<!rec_test53A3AX>> loc(#loc36)
+    %1 = cir.load align(4) %0 : !cir.ptr<!cir.ptr<!rec_test53A3AX>>, !cir.ptr<!rec_test53A3AX> loc(#loc37)
+    %2 = cir.cast bitcast %1 : !cir.ptr<!rec_test53A3AX> -> !cir.ptr<!u8i> loc(#loc37)
+    %3 = cir.const #cir.int<4> : !s32i loc(#loc38)
+    %4 = cir.ptr_stride %2, %3 : (!cir.ptr<!u8i>, !s32i) -> !cir.ptr<!u8i> loc(#loc38)
+    %5 = cir.cast bitcast %4 : !cir.ptr<!u8i> -> !cir.ptr<!rec_test53A3AX> loc(#loc38)
+    %6 = cir.cast bitcast %5 : !cir.ptr<!rec_test53A3AX> -> !cir.ptr<!void> loc(#loc38)
+    %7 = cir.cast bitcast %1 : !cir.ptr<!rec_test53A3AX> -> !cir.ptr<!u8i> loc(#loc37)
+    %8 = cir.const #cir.int<4> : !s32i loc(#loc38)
+    %9 = cir.ptr_stride %7, %8 : (!cir.ptr<!u8i>, !s32i) -> !cir.ptr<!u8i> loc(#loc38)
+    %10 = cir.cast bitcast %9 : !cir.ptr<!u8i> -> !cir.ptr<!rec_test53A3AX> loc(#loc38)
+    %11 = cir.vtable.get_vptr %10 : !cir.ptr<!rec_test53A3AX> -> !cir.ptr<!cir.vptr> loc(#loc37)
+    %12 = cir.load align(4) %11 : !cir.ptr<!cir.vptr>, !cir.vptr loc(#loc37)
+    %13 = cir.vtable.get_virtual_fn_addr %12[2] : !cir.vptr -> !cir.ptr<!cir.ptr<!cir.func<(!cir.ptr<!void>) -> !cir.ptr<!rec_test53A3AC>>>> loc(#loc37)
+    %14 = cir.load align(4) %13 : !cir.ptr<!cir.ptr<!cir.func<(!cir.ptr<!void>) -> !cir.ptr<!rec_test53A3AC>>>>, !cir.ptr<!cir.func<(!cir.ptr<!void>) -> !cir.ptr<!rec_test53A3AC>>> loc(#loc37)
+    %15 = cir.call %14(%6) cc(x86_thiscall) : (!cir.ptr<!cir.func<(!cir.ptr<!void>) -> !cir.ptr<!rec_test53A3AC>>>, !cir.ptr<!void> {llvm.noundef}) -> (!cir.ptr<!rec_test53A3AC> {llvm.noundef}) loc(#loc91)
+    cir.return loc(#loc33)
+  } loc(#loc89)
+  cir.func no_inline dso_local @"?build_vftable@test6@@YAXPAUX@1@@Z"(%arg0: !cir.ptr<!rec_test63A3AX> {llvm.noundef} loc(fused[#loc42, #loc43])) attributes {"cir.target-features" = "+cx8,+x87", nothrow} {
+    %0 = cir.alloca "obj" align(4) init : !cir.ptr<!cir.ptr<!rec_test63A3AX>> loc(#loc93)
+    cir.store %arg0, %0 : !cir.ptr<!rec_test63A3AX>, !cir.ptr<!cir.ptr<!rec_test63A3AX>> loc(#loc44)
+    %1 = cir.load align(4) %0 : !cir.ptr<!cir.ptr<!rec_test63A3AX>>, !cir.ptr<!rec_test63A3AX> loc(#loc45)
+    %2 = cir.cast bitcast %1 : !cir.ptr<!rec_test63A3AX> -> !cir.ptr<!u8i> loc(#loc45)
+    %3 = cir.const #cir.int<4> : !s32i loc(#loc46)
+    %4 = cir.ptr_stride %2, %3 : (!cir.ptr<!u8i>, !s32i) -> !cir.ptr<!u8i> loc(#loc46)
+    %5 = cir.cast bitcast %4 : !cir.ptr<!u8i> -> !cir.ptr<!rec_test63A3AX> loc(#loc46)
+    %6 = cir.cast bitcast %5 : !cir.ptr<!rec_test63A3AX> -> !cir.ptr<!void> loc(#loc46)
+    %7 = cir.cast bitcast %1 : !cir.ptr<!rec_test63A3AX> -> !cir.ptr<!u8i> loc(#loc45)
+    %8 = cir.const #cir.int<4> : !s32i loc(#loc46)
+    %9 = cir.ptr_stride %7, %8 : (!cir.ptr<!u8i>, !s32i) -> !cir.ptr<!u8i> loc(#loc46)
+    %10 = cir.cast bitcast %9 : !cir.ptr<!u8i> -> !cir.ptr<!rec_test63A3AX> loc(#loc46)
+    %11 = cir.vtable.get_vptr %10 : !cir.ptr<!rec_test63A3AX> -> !cir.ptr<!cir.vptr> loc(#loc45)
+    %12 = cir.load align(4) %11 : !cir.ptr<!cir.vptr>, !cir.vptr loc(#loc45)
+    %13 = cir.vtable.get_virtual_fn_addr %12[3] : !cir.vptr -> !cir.ptr<!cir.ptr<!cir.func<(!cir.ptr<!void>) -> !cir.ptr<!rec_test63A3AF>>>> loc(#loc45)
+    %14 = cir.load align(4) %13 : !cir.ptr<!cir.ptr<!cir.func<(!cir.ptr<!void>) -> !cir.ptr<!rec_test63A3AF>>>>, !cir.ptr<!cir.func<(!cir.ptr<!void>) -> !cir.ptr<!rec_test63A3AF>>> loc(#loc45)
+    %15 = cir.call %14(%6) cc(x86_thiscall) : (!cir.ptr<!cir.func<(!cir.ptr<!void>) -> !cir.ptr<!rec_test63A3AF>>>, !cir.ptr<!void> {llvm.noundef}) -> (!cir.ptr<!rec_test63A3AF> {llvm.noundef}) loc(#loc94)
+    cir.return loc(#loc41)
+  } loc(#loc92)
+  cir.func no_inline dso_local @"?build_vftable@test7@@YAXPAUC@1@@Z"(%arg0: !cir.ptr<!rec_test73A3AC> {llvm.noundef} loc(fused[#loc50, #loc51])) attributes {"cir.target-features" = "+cx8,+x87", nothrow} {
+    %0 = cir.alloca "obj" align(4) init : !cir.ptr<!cir.ptr<!rec_test73A3AC>> loc(#loc96)
+    cir.store %arg0, %0 : !cir.ptr<!rec_test73A3AC>, !cir.ptr<!cir.ptr<!rec_test73A3AC>> loc(#loc52)
+    %1 = cir.load align(4) %0 : !cir.ptr<!cir.ptr<!rec_test73A3AC>>, !cir.ptr<!rec_test73A3AC> loc(#loc53)
+    %2 = cir.vtable.get_vptr %1 : !cir.ptr<!rec_test73A3AC> -> !cir.ptr<!cir.vptr> loc(#loc53)
+    %3 = cir.load align(4) %2 : !cir.ptr<!cir.vptr>, !cir.vptr loc(#loc53)
+    %4 = cir.vtable.get_virtual_fn_addr %3[0] : !cir.vptr -> !cir.ptr<!cir.ptr<!cir.func<(!cir.ptr<!rec_test73A3AC>)>>> loc(#loc53)
+    %5 = cir.load align(4) %4 : !cir.ptr<!cir.ptr<!cir.func<(!cir.ptr<!rec_test73A3AC>)>>>, !cir.ptr<!cir.func<(!cir.ptr<!rec_test73A3AC>)>> loc(#loc53)
+    cir.call %5(%1) cc(x86_thiscall) : (!cir.ptr<!cir.func<(!cir.ptr<!rec_test73A3AC>)>>, !cir.ptr<!rec_test73A3AC> {llvm.align = 4 : i64, llvm.dereferenceable = 8 : i64, llvm.nonnull, llvm.noundef}) -> () loc(#loc97)
+    cir.return loc(#loc49)
+  } loc(#loc95)
+  cir.func no_inline dso_local @"?build_vftable@pr20444@@YAXPAUC@1@@Z"(%arg0: !cir.ptr<!rec_pr204443A3AC> {llvm.noundef} loc(fused[#loc57, #loc58])) attributes {"cir.target-features" = "+cx8,+x87", nothrow} {
+    %0 = cir.alloca "obj" align(4) init : !cir.ptr<!cir.ptr<!rec_pr204443A3AC>> loc(#loc99)
+    cir.store %arg0, %0 : !cir.ptr<!rec_pr204443A3AC>, !cir.ptr<!cir.ptr<!rec_pr204443A3AC>> loc(#loc59)
+    %1 = cir.load align(4) %0 : !cir.ptr<!cir.ptr<!rec_pr204443A3AC>>, !cir.ptr<!rec_pr204443A3AC> loc(#loc60)
+    %2 = cir.vtable.get_vptr %1 : !cir.ptr<!rec_pr204443A3AC> -> !cir.ptr<!cir.vptr> loc(#loc60)
+    %3 = cir.load align(4) %2 : !cir.ptr<!cir.vptr>, !cir.vptr loc(#loc60)
+    %4 = cir.vtable.get_virtual_fn_addr %3[0] : !cir.vptr -> !cir.ptr<!cir.ptr<!cir.func<(!cir.ptr<!rec_pr204443A3AC>) -> !cir.ptr<!rec_pr204443A3AC>>>> loc(#loc60)
+    %5 = cir.load align(4) %4 : !cir.ptr<!cir.ptr<!cir.func<(!cir.ptr<!rec_pr204443A3AC>) -> !cir.ptr<!rec_pr204443A3AC>>>>, !cir.ptr<!cir.func<(!cir.ptr<!rec_pr204443A3AC>) -> !cir.ptr<!rec_pr204443A3AC>>> loc(#loc60)
+    %6 = cir.call %5(%1) cc(x86_thiscall) : (!cir.ptr<!cir.func<(!cir.ptr<!rec_pr204443A3AC>) -> !cir.ptr<!rec_pr204443A3AC>>>, !cir.ptr<!rec_pr204443A3AC> {llvm.align = 4 : i64, llvm.dereferenceable = 8 : i64, llvm.nonnull, llvm.noundef}) -> (!cir.ptr<!rec_pr204443A3AC> {llvm.noundef}) loc(#loc100)
+    cir.return loc(#loc56)
+  } loc(#loc98)
+  cir.func no_inline dso_local @"?build_vftable@pr20444@@YAXPAUD@1@@Z"(%arg0: !cir.ptr<!rec_pr204443A3AD> {llvm.noundef} loc(fused[#loc64, #loc65])) attributes {"cir.target-features" = "+cx8,+x87", nothrow} {
+    %0 = cir.alloca "obj" align(4) init : !cir.ptr<!cir.ptr<!rec_pr204443A3AD>> loc(#loc102)
+    cir.store %arg0, %0 : !cir.ptr<!rec_pr204443A3AD>, !cir.ptr<!cir.ptr<!rec_pr204443A3AD>> loc(#loc66)
+    %1 = cir.load align(4) %0 : !cir.ptr<!cir.ptr<!rec_pr204443A3AD>>, !cir.ptr<!rec_pr204443A3AD> loc(#loc67)
+    %2 = cir.vtable.get_vptr %1 : !cir.ptr<!rec_pr204443A3AD> -> !cir.ptr<!cir.vptr> loc(#loc67)
+    %3 = cir.load align(4) %2 : !cir.ptr<!cir.vptr>, !cir.vptr loc(#loc67)
+    %4 = cir.vtable.get_virtual_fn_addr %3[0] : !cir.vptr -> !cir.ptr<!cir.ptr<!cir.func<(!cir.ptr<!rec_pr204443A3AD>) -> !cir.ptr<!rec_pr204443A3AD>>>> loc(#loc67)
+    %5 = cir.load align(4) %4 : !cir.ptr<!cir.ptr<!cir.func<(!cir.ptr<!rec_pr204443A3AD>) -> !cir.ptr<!rec_pr204443A3AD>>>>, !cir.ptr<!cir.func<(!cir.ptr<!rec_pr204443A3AD>) -> !cir.ptr<!rec_pr204443A3AD>>> loc(#loc67)
+    %6 = cir.call %5(%1) cc(x86_thiscall) : (!cir.ptr<!cir.func<(!cir.ptr<!rec_pr204443A3AD>) -> !cir.ptr<!rec_pr204443A3AD>>>, !cir.ptr<!rec_pr204443A3AD> {llvm.align = 4 : i64, llvm.dereferenceable = 8 : i64, llvm.nonnull, llvm.noundef}) -> (!cir.ptr<!rec_pr204443A3AD> {llvm.noundef}) loc(#loc103)
+    cir.return loc(#loc63)
+  } loc(#loc101)
+  cir.func no_inline comdat weak_odr dso_local @"?foo@X@test1@@QAEPAUB@2@XZ"(%arg0: !cir.ptr<!rec_test13A3AX> {llvm.noundef} loc("e:\\lib\\llvm\\clang\\test\\CodeGenCXX\\microsoft-abi-vtables-multiple-nonvirtual-inheritance-return-adjustment.cpp":41:14)) -> (!cir.ptr<!rec_test13A3AC> {llvm.noundef}) cc(x86_thiscall) attributes {"cir.target-features" = "+cx8,+x87", nothrow} {
+    %0 = cir.alloca "this" align(4) init : !cir.ptr<!cir.ptr<!rec_test13A3AX>> loc(#loc71)
+    %1 = cir.alloca "__retval" align(4) : !cir.ptr<!cir.ptr<!rec_test13A3AC>> loc(#loc71)
+    cir.store %arg0, %0 : !cir.ptr<!rec_test13A3AX>, !cir.ptr<!cir.ptr<!rec_test13A3AX>> loc(#loc71)
+    %2 = cir.load %0 : !cir.ptr<!cir.ptr<!rec_test13A3AX>>, !cir.ptr<!rec_test13A3AX> loc(#loc71)
+    %3 = cir.call @"?foo@X@test1@@UAEPAUC@2@XZ"(%2) cc(x86_thiscall) : (!cir.ptr<!rec_test13A3AX> {llvm.align = 4 : i64, llvm.dereferenceable = 4 : i64, llvm.nonnull, llvm.noundef}) -> (!cir.ptr<!rec_test13A3AC> {llvm.noundef}) loc(#loc104)
+    %4 = cir.const #cir.ptr<null> : !cir.ptr<!rec_test13A3AC> loc(#loc104)
+    %5 = cir.cmp ne %3, %4 : !cir.ptr<!rec_test13A3AC> loc(#loc104)
+    %6 = cir.ternary(%5, true {
+      %8 = cir.cast bitcast %3 : !cir.ptr<!rec_test13A3AC> -> !cir.ptr<!u8i> loc(#loc104)
+      %9 = cir.const #cir.int<4> : !s32i loc(#loc72)
+      %10 = cir.ptr_stride %8, %9 : (!cir.ptr<!u8i>, !s32i) -> !cir.ptr<!u8i> loc(#loc72)
+      %11 = cir.cast bitcast %10 : !cir.ptr<!u8i> -> !cir.ptr<!rec_test13A3AC> loc(#loc72)
+      cir.yield %11 : !cir.ptr<!rec_test13A3AC> loc(#loc104)
+    }, false {
+      %8 = cir.const #cir.ptr<null> : !cir.ptr<!rec_test13A3AC> loc(#loc104)
+      cir.yield %8 : !cir.ptr<!rec_test13A3AC> loc(#loc104)
+    }) : (!cir.bool) -> !cir.ptr<!rec_test13A3AC> loc(#loc104)
+    cir.store align(4) %6, %1 : !cir.ptr<!rec_test13A3AC>, !cir.ptr<!cir.ptr<!rec_test13A3AC>> loc(#loc73)
+    %7 = cir.load %1 : !cir.ptr<!cir.ptr<!rec_test13A3AC>>, !cir.ptr<!rec_test13A3AC> loc(#loc73)
+    cir.return %7 : !cir.ptr<!rec_test13A3AC> loc(#loc73)
+  } loc(#loc104)
+  cir.func private dso_local @"?foo@X@test1@@UAEPAUC@2@XZ"(!cir.ptr<!rec_test13A3AX> {llvm.align = 4 : i64, llvm.dereferenceable = 4 : i64, llvm.nonnull, llvm.noundef}) -> (!cir.ptr<!rec_test13A3AC> {llvm.noundef}) cc(x86_thiscall) attributes {"cir.target-features" = "+cx8,+x87"} loc(#loc104)
+  cir.func private @"?z@D@test1@@UAEXXZ"(!cir.ptr<!rec_test13A3AD> {llvm.align = 4 : i64, llvm.dereferenceable = 4 : i64, llvm.nonnull, llvm.noundef}) cc(x86_thiscall) attributes {"cir.target-features" = "+cx8,+x87"} loc(#loc105)
+} loc(#loc)
+#loc = loc("E:\\lib\\llvm\\clang\\test\\CodeGenCXX\\microsoft-abi-vtables-multiple-nonvirtual-inheritance-return-adjustment.cpp":0:0)
+#loc1 = loc("e:\\lib\\llvm\\clang\\test\\CodeGenCXX\\microsoft-abi-vtables-multiple-nonvirtual-inheritance-return-adjustment.cpp":26:8)
+#loc2 = loc("e:\\lib\\llvm\\clang\\test\\CodeGenCXX\\microsoft-abi-vtables-multiple-nonvirtual-inheritance-return-adjustment.cpp":26:1)
+#loc3 = loc("e:\\lib\\llvm\\clang\\test\\CodeGenCXX\\microsoft-abi-vtables-multiple-nonvirtual-inheritance-return-adjustment.cpp":42:3)
+#loc4 = loc("e:\\lib\\llvm\\clang\\test\\CodeGenCXX\\microsoft-abi-vtables-multiple-nonvirtual-inheritance-return-adjustment.cpp":44:1)
+#loc5 = loc("e:\\lib\\llvm\\clang\\test\\CodeGenCXX\\microsoft-abi-vtables-multiple-nonvirtual-inheritance-return-adjustment.cpp":44:42)
+#loc8 = loc("e:\\lib\\llvm\\clang\\test\\CodeGenCXX\\microsoft-abi-vtables-multiple-nonvirtual-inheritance-return-adjustment.cpp":44:28)
+#loc9 = loc("e:\\lib\\llvm\\clang\\test\\CodeGenCXX\\microsoft-abi-vtables-multiple-nonvirtual-inheritance-return-adjustment.cpp":44:30)
+#loc10 = loc("e:\\lib\\llvm\\clang\\test\\CodeGenCXX\\microsoft-abi-vtables-multiple-nonvirtual-inheritance-return-adjustment.cpp":44:39)
+#loc11 = loc("e:\\lib\\llvm\\clang\\test\\CodeGenCXX\\microsoft-abi-vtables-multiple-nonvirtual-inheritance-return-adjustment.cpp":90:1)
+#loc12 = loc("e:\\lib\\llvm\\clang\\test\\CodeGenCXX\\microsoft-abi-vtables-multiple-nonvirtual-inheritance-return-adjustment.cpp":90:42)
+#loc15 = loc("e:\\lib\\llvm\\clang\\test\\CodeGenCXX\\microsoft-abi-vtables-multiple-nonvirtual-inheritance-return-adjustment.cpp":90:28)
+#loc16 = loc("e:\\lib\\llvm\\clang\\test\\CodeGenCXX\\microsoft-abi-vtables-multiple-nonvirtual-inheritance-return-adjustment.cpp":90:30)
+#loc17 = loc("e:\\lib\\llvm\\clang\\test\\CodeGenCXX\\microsoft-abi-vtables-multiple-nonvirtual-inheritance-return-adjustment.cpp":90:39)
+#loc18 = loc("e:\\lib\\llvm\\clang\\test\\CodeGenCXX\\microsoft-abi-vtables-multiple-nonvirtual-inheritance-return-adjustment.cpp":137:1)
+#loc19 = loc("e:\\lib\\llvm\\clang\\test\\CodeGenCXX\\microsoft-abi-vtables-multiple-nonvirtual-inheritance-return-adjustment.cpp":137:42)
+#loc22 = loc("e:\\lib\\llvm\\clang\\test\\CodeGenCXX\\microsoft-abi-vtables-multiple-nonvirtual-inheritance-return-adjustment.cpp":137:28)
+#loc23 = loc("e:\\lib\\llvm\\clang\\test\\CodeGenCXX\\microsoft-abi-vtables-multiple-nonvirtual-inheritance-return-adjustment.cpp":137:30)
+#loc24 = loc("e:\\lib\\llvm\\clang\\test\\CodeGenCXX\\microsoft-abi-vtables-multiple-nonvirtual-inheritance-return-adjustment.cpp":137:39)
+#loc25 = loc("e:\\lib\\llvm\\clang\\test\\CodeGenCXX\\microsoft-abi-vtables-multiple-nonvirtual-inheritance-return-adjustment.cpp":201:1)
+#loc26 = loc("e:\\lib\\llvm\\clang\\test\\CodeGenCXX\\microsoft-abi-vtables-multiple-nonvirtual-inheritance-return-adjustment.cpp":201:42)
+#loc29 = loc("e:\\lib\\llvm\\clang\\test\\CodeGenCXX\\microsoft-abi-vtables-multiple-nonvirtual-inheritance-return-adjustment.cpp":201:28)
+#loc30 = loc("e:\\lib\\llvm\\clang\\test\\CodeGenCXX\\microsoft-abi-vtables-multiple-nonvirtual-inheritance-return-adjustment.cpp":201:30)
+#loc31 = loc("e:\\lib\\llvm\\clang\\test\\CodeGenCXX\\microsoft-abi-vtables-multiple-nonvirtual-inheritance-return-adjustment.cpp":201:39)
+#loc32 = loc("e:\\lib\\llvm\\clang\\test\\CodeGenCXX\\microsoft-abi-vtables-multiple-nonvirtual-inheritance-return-adjustment.cpp":244:1)
+#loc33 = loc("e:\\lib\\llvm\\clang\\test\\CodeGenCXX\\microsoft-abi-vtables-multiple-nonvirtual-inheritance-return-adjustment.cpp":244:42)
+#loc36 = loc("e:\\lib\\llvm\\clang\\test\\CodeGenCXX\\microsoft-abi-vtables-multiple-nonvirtual-inheritance-return-adjustment.cpp":244:28)
+#loc37 = loc("e:\\lib\\llvm\\clang\\test\\CodeGenCXX\\microsoft-abi-vtables-multiple-nonvirtual-inheritance-return-adjustment.cpp":244:30)
+#loc38 = loc("e:\\lib\\llvm\\clang\\test\\CodeGenCXX\\microsoft-abi-vtables-multiple-nonvirtual-inheritance-return-adjustment.cpp":241:14)
+#loc39 = loc("e:\\lib\\llvm\\clang\\test\\CodeGenCXX\\microsoft-abi-vtables-multiple-nonvirtual-inheritance-return-adjustment.cpp":244:39)
+#loc40 = loc("e:\\lib\\llvm\\clang\\test\\CodeGenCXX\\microsoft-abi-vtables-multiple-nonvirtual-inheritance-return-adjustment.cpp":296:1)
+#loc41 = loc("e:\\lib\\llvm\\clang\\test\\CodeGenCXX\\microsoft-abi-vtables-multiple-nonvirtual-inheritance-return-adjustment.cpp":296:42)
+#loc44 = loc("e:\\lib\\llvm\\clang\\test\\CodeGenCXX\\microsoft-abi-vtables-multiple-nonvirtual-inheritance-return-adjustment.cpp":296:28)
+#loc45 = loc("e:\\lib\\llvm\\clang\\test\\CodeGenCXX\\microsoft-abi-vtables-multiple-nonvirtual-inheritance-return-adjustment.cpp":296:30)
+#loc46 = loc("e:\\lib\\llvm\\clang\\test\\CodeGenCXX\\microsoft-abi-vtables-multiple-nonvirtual-inheritance-return-adjustment.cpp":293:14)
+#loc47 = loc("e:\\lib\\llvm\\clang\\test\\CodeGenCXX\\microsoft-abi-vtables-multiple-nonvirtual-inheritance-return-adjustment.cpp":296:39)
+#loc48 = loc("e:\\lib\\llvm\\clang\\test\\CodeGenCXX\\microsoft-abi-vtables-multiple-nonvirtual-inheritance-return-adjustment.cpp":320:1)
+#loc49 = loc("e:\\lib\\llvm\\clang\\test\\CodeGenCXX\\microsoft-abi-vtables-multiple-nonvirtual-inheritance-return-adjustment.cpp":320:40)
+#loc52 = loc("e:\\lib\\llvm\\clang\\test\\CodeGenCXX\\microsoft-abi-vtables-multiple-nonvirtual-inheritance-return-adjustment.cpp":320:28)
+#loc53 = loc("e:\\lib\\llvm\\clang\\test\\CodeGenCXX\\microsoft-abi-vtables-multiple-nonvirtual-inheritance-return-adjustment.cpp":320:30)
+#loc54 = loc("e:\\lib\\llvm\\clang\\test\\CodeGenCXX\\microsoft-abi-vtables-multiple-nonvirtual-inheritance-return-adjustment.cpp":320:37)
+#loc55 = loc("e:\\lib\\llvm\\clang\\test\\CodeGenCXX\\microsoft-abi-vtables-multiple-nonvirtual-inheritance-return-adjustment.cpp":344:1)
+#loc56 = loc("e:\\lib\\llvm\\clang\\test\\CodeGenCXX\\microsoft-abi-vtables-multiple-nonvirtual-inheritance-return-adjustment.cpp":344:40)
+#loc59 = loc("e:\\lib\\llvm\\clang\\test\\CodeGenCXX\\microsoft-abi-vtables-multiple-nonvirtual-inheritance-return-adjustment.cpp":344:28)
+#loc60 = loc("e:\\lib\\llvm\\clang\\test\\CodeGenCXX\\microsoft-abi-vtables-multiple-nonvirtual-inheritance-return-adjustment.cpp":344:30)
+#loc61 = loc("e:\\lib\\llvm\\clang\\test\\CodeGenCXX\\microsoft-abi-vtables-multiple-nonvirtual-inheritance-return-adjustment.cpp":344:37)
+#loc62 = loc("e:\\lib\\llvm\\clang\\test\\CodeGenCXX\\microsoft-abi-vtables-multiple-nonvirtual-inheritance-return-adjustment.cpp":363:1)
+#loc63 = loc("e:\\lib\\llvm\\clang\\test\\CodeGenCXX\\microsoft-abi-vtables-multiple-nonvirtual-inheritance-return-adjustment.cpp":363:40)
+#loc66 = loc("e:\\lib\\llvm\\clang\\test\\CodeGenCXX\\microsoft-abi-vtables-multiple-nonvirtual-inheritance-return-adjustment.cpp":363:28)
+#loc67 = loc("e:\\lib\\llvm\\clang\\test\\CodeGenCXX\\microsoft-abi-vtables-multiple-nonvirtual-inheritance-return-adjustment.cpp":363:30)
+#loc68 = loc("e:\\lib\\llvm\\clang\\test\\CodeGenCXX\\microsoft-abi-vtables-multiple-nonvirtual-inheritance-return-adjustment.cpp":363:37)
+#loc69 = loc("e:\\lib\\llvm\\clang\\test\\CodeGenCXX\\microsoft-abi-vtables-multiple-nonvirtual-inheritance-return-adjustment.cpp":41:3)
+#loc70 = loc("e:\\lib\\llvm\\clang\\test\\CodeGenCXX\\microsoft-abi-vtables-multiple-nonvirtual-inheritance-return-adjustment.cpp":41:18)
+#loc72 = loc("e:\\lib\\llvm\\clang\\test\\CodeGenCXX\\microsoft-abi-vtables-multiple-nonvirtual-inheritance-return-adjustment.cpp":17:8)
+#loc73 = loc(unknown)
+#loc74 = loc("e:\\lib\\llvm\\clang\\test\\CodeGenCXX\\microsoft-abi-vtables-multiple-nonvirtual-inheritance-return-adjustment.cpp":23:3)
+#loc75 = loc("e:\\lib\\llvm\\clang\\test\\CodeGenCXX\\microsoft-abi-vtables-multiple-nonvirtual-inheritance-return-adjustment.cpp":23:18)
+#loc76 = loc(fused[#loc2, #loc3])
+#loc77 = loc(fused[#loc4, #loc5])
+#loc79 = loc(fused[#loc9, #loc10])
+#loc80 = loc(fused[#loc11, #loc12])
+#loc82 = loc(fused[#loc16, #loc17])
+#loc83 = loc(fused[#loc18, #loc19])
+#loc85 = loc(fused[#loc23, #loc24])
+#loc86 = loc(fused[#loc25, #loc26])
+#loc88 = loc(fused[#loc30, #loc31])
+#loc89 = loc(fused[#loc32, #loc33])
+#loc91 = loc(fused[#loc37, #loc39])
+#loc92 = loc(fused[#loc40, #loc41])
+#loc94 = loc(fused[#loc45, #loc47])
+#loc95 = loc(fused[#loc48, #loc49])
+#loc97 = loc(fused[#loc53, #loc54])
+#loc98 = loc(fused[#loc55, #loc56])
+#loc100 = loc(fused[#loc60, #loc61])
+#loc101 = loc(fused[#loc62, #loc63])
+#loc103 = loc(fused[#loc67, #loc68])
+#loc104 = loc(fused[#loc69, #loc70])
+#loc105 = loc(fused[#loc74, #loc75])
