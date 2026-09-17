@@ -661,7 +661,8 @@ void CIRGenFunction::finishThunk() {
   curCodeDecl = nullptr;
   curFuncDecl = nullptr;
 
-  finishFunction(SourceLocation());
+  if (prologueCleanupDepth.isValid())
+    finishFunction(SourceLocation());
 }
 
 void CIRGenFunction::emitCallAndReturnForThunk(cir::FuncOp callee,
@@ -795,6 +796,45 @@ void CIRGenFunction::emitMustTailThunk(GlobalDecl gd,
   cir::CallOp call = builder.createCallOp(loc, callee, args);
   call->setAttr(cir::CIRDialect::getMustTailAttrName(),
                 mlir::UnitAttr::get(builder.getContext()));
+  auto curFnOp = cast<cir::FuncOp>(curFn);
+  if (curFnOp.getCallingConv() != cir::CallingConv::C)
+    call.setCallingConv(curFnOp.getCallingConv());
+
+  if (isa<cir::VoidType>(retTy))
+    cir::ReturnOp::create(builder, loc);
+  else
+    cir::ReturnOp::create(builder, loc, call->getResult(0));
+
+  finishThunk();
+}
+
+void CIRGenFunction::emitMustTailThunk(GlobalDecl gd,
+                                       mlir::Value adjustedThisPtr,
+                                       mlir::Value calleePtr,
+                                       cir::FuncType calleeTy) {
+  // Forward all function arguments, replacing 'this' with the adjusted pointer.
+  // The call is marked musttail so varargs are forwarded correctly.
+  mlir::Block *entryBlock = getCurFunctionEntryBlock();
+  SmallVector<mlir::Value> args;
+  for (mlir::BlockArgument arg : entryBlock->getArguments())
+    args.push_back(arg);
+
+  // Replace the 'this' argument (first arg) with the adjusted pointer.
+  assert(!args.empty() && "thunk must have at least 'this' argument");
+  if (adjustedThisPtr.getType() != args[0].getType())
+    adjustedThisPtr = builder.createBitcast(adjustedThisPtr, args[0].getType());
+  args[0] = adjustedThisPtr;
+
+  mlir::Location loc = curFn->getLoc();
+  mlir::Type retTy = calleeTy.getReturnType();
+
+  cir::CallOp call =
+      builder.createIndirectCallOp(loc, calleePtr, calleeTy, args);
+  call->setAttr(cir::CIRDialect::getMustTailAttrName(),
+                mlir::UnitAttr::get(builder.getContext()));
+  auto curFnOp = cast<cir::FuncOp>(curFn);
+  if (curFnOp.getCallingConv() != cir::CallingConv::C)
+    call.setCallingConv(curFnOp.getCallingConv());
 
   if (isa<cir::VoidType>(retTy))
     cir::ReturnOp::create(builder, loc);

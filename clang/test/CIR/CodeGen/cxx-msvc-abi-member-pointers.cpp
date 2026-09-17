@@ -63,15 +63,16 @@ void (U::*u_fn_null)() = nullptr;
 // CIR-AFTER-DAG: cir.global external dso_local @"?u_fn_null@@3P8U@@EAAXXZEQ1@" = #cir.const_record<{#cir.ptr<null> : !cir.ptr<!void>, #cir.int<0> : !s32i, #cir.int<0> : !s32i, #cir.int<-1> : !s32i}>
 
 // Test vcall thunk generation
-// CIR-BEFORE-LABEL: cir.func linkonce_odr @"??_9Poly@@$BA@AA"(%arg0: !cir.ptr<!rec_Poly>)
+// CIR-BEFORE-LABEL: cir.func {{.*}}@"??_9Poly@@$BA@AA"(%arg0: !cir.ptr<!rec_Poly>{{.*}}, ...)
+// CIR-BEFORE-SAME: attributes {{{.*}}thunk{{.*}}}
 // CIR-BEFORE:   %[[THIS_PTR:.*]] = cir.cast bitcast %arg0 : !cir.ptr<!rec_Poly> -> !cir.ptr<!cir.ptr<!void>>
 // CIR-BEFORE:   %[[VTABLE:.*]] = cir.load {{.*}}%[[THIS_PTR]] : !cir.ptr<!cir.ptr<!void>>, !cir.ptr<!void>
 // CIR-BEFORE:   %[[IDX:.*]] = cir.const #cir.int<0> : !u64i
 // CIR-BEFORE:   %[[SLOT:.*]] = cir.ptr_stride %[[VTABLE]], %[[IDX]] : (!cir.ptr<!void>, !u64i) -> !cir.ptr<!void>
 // CIR-BEFORE:   %[[SLOT_PTR:.*]] = cir.cast bitcast %[[SLOT]] : !cir.ptr<!void> -> !cir.ptr<!cir.ptr<!void>>
 // CIR-BEFORE:   %[[CALLEE:.*]] = cir.load {{.*}}%[[SLOT_PTR]] : !cir.ptr<!cir.ptr<!void>>, !cir.ptr<!void>
-// CIR-BEFORE:   %[[CALLEE_TYPED:.*]] = cir.cast bitcast %[[CALLEE]] : !cir.ptr<!void> -> !cir.ptr<!cir.func<(!cir.ptr<!rec_Poly>)>>
-// CIR-BEFORE:   cir.call %[[CALLEE_TYPED]](%arg0)
+// CIR-BEFORE:   %[[CALLEE_TYPED:.*]] = cir.cast bitcast %[[CALLEE]] : !cir.ptr<!void> -> !cir.ptr<!cir.func<(!cir.ptr<!rec_Poly>, ...)>>
+// CIR-BEFORE:   cir.call %[[CALLEE_TYPED]](%arg0) musttail
 // CIR-BEFORE:   cir.return
 
 // Test member data pointer access

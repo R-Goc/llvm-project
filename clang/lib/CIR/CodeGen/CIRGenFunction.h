@@ -2269,6 +2269,8 @@ public:
   /// Emit a musttail call for a thunk with a potentially different ABI.
   void emitMustTailThunk(GlobalDecl gd, mlir::Value adjustedThisPtr,
                          cir::FuncOp callee);
+  void emitMustTailThunk(GlobalDecl gd, mlir::Value adjustedThisPtr,
+                         mlir::Value calleePtr, cir::FuncType calleeTy);
 
   /// Emit a call to an AMDGPU builtin function.
   std::optional<mlir::Value> emitAMDGPUBuiltinExpr(unsigned builtinID,
