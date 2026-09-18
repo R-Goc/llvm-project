@@ -90,7 +90,6 @@ let cppNamespace = "::cir" in {
                       /*defaultImplementation=*/[{
                         return $_op.getCallingConvAttrName();
                       }]>,
-                      }]>,
     ];
   }
 
@@ -208,6 +207,36 @@ let cppNamespace = "::cir" in {
       "void", "setGlobalVisibility", (ins "cir::VisibilityKind":$val), [{}],
       /*defaultImplementation=*/[{
         $_op.setGlobalVisibility(val);
+      }]
+      >,
+      InterfaceMethod<"",
+      "cir::VisibilityKind", "getGlobalVisibility", (ins), [{}],
+      /*defaultImplementation=*/[{
+        return $_op.getGlobalVisibility();
+      }]
+      >,
+      InterfaceMethod<"",
+      "cir::DLLStorageClass", "getDLLStorageClass", (ins), [{}],
+      /*defaultImplementation=*/[{
+        return $_op.getDllStorageClass();
+      }]
+      >,
+      InterfaceMethod<"",
+      "void", "setDLLStorageClass", (ins "cir::DLLStorageClass":$val), [{}],
+      /*defaultImplementation=*/[{
+        $_op.setDllStorageClass(val);
+      }]
+      >,
+      InterfaceMethod<"",
+      "bool", "hasDLLImportStorageClass", (ins), [{}],
+      /*defaultImplementation=*/[{
+        return $_op.getDllStorageClass() == cir::DLLStorageClass::DLLImportStorageClass;
+      }]
+      >,
+      InterfaceMethod<"",
+      "bool", "hasDLLExportStorageClass", (ins), [{}],
+      /*defaultImplementation=*/[{
+        return $_op.getDllStorageClass() == cir::DLLStorageClass::DLLExportStorageClass;
       }]
       >,
       InterfaceMethod<"",

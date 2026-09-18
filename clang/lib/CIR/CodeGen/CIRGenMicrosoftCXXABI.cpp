@@ -119,6 +119,15 @@ public:
 
   bool exportThunk() override { return false; }
 
+  void setCXXDestructorDLLStorage(cir::CIRGlobalValueInterface gv,
+                                  const CXXDestructorDecl *dtor,
+                                  CXXDtorType dt) const override {
+    if (dt == Dtor_Deleting || dt == Dtor_VectorDeleting)
+      gv.setDLLStorageClass(cir::DLLStorageClass::DefaultStorageClass);
+    else
+      cgm.setDLLImportDLLExport(gv, dtor);
+  }
+
   bool useThunkForDtorVariant(const CXXDestructorDecl *dtor,
                               CXXDtorType dt) const override {
     return dt != Dtor_Base;
@@ -1042,7 +1051,7 @@ cir::GlobalOp CIRGenMicrosoftCXXABI::getAddrOfVTable(const CXXRecordDecl *rd,
   vtable.setLinkage(linkage);
 
   if (rd->hasAttr<DLLExportAttr>())
-    vtable.setVisibility(mlir::SymbolTable::Visibility::Public);
+    vtable.setDLLStorageClass(cir::DLLStorageClass::DLLExportStorageClass);
 
   vftablesMap[id] = vtable;
   return vtable;
@@ -1141,9 +1150,7 @@ CIRGenMicrosoftCXXABI::enumerateVBTables(const CXXRecordDecl *rd) {
   MicrosoftVTableContext &context = cgm.getMicrosoftVTableContext();
   vbGlobals.VBTables = &context.enumerateVBTables(rd);
 
-  cir::GlobalLinkageKind linkage =
-      rd->hasAttr<DLLImportAttr>() ? cir::GlobalLinkageKind::LinkOnceODRLinkage
-                                   : cgm.getVTableLinkage(rd);
+  cir::GlobalLinkageKind linkage = cgm.getVTableLinkage(rd);
   for (const auto &vbt : *vbGlobals.VBTables)
     vbGlobals.Globals.push_back(getAddrOfVBTable(*vbt, rd, linkage));
 
@@ -1174,8 +1181,10 @@ CIRGenMicrosoftCXXABI::getAddrOfVBTable(const VPtrInfo &vbt,
       cgm.getASTContext().getTypeAlignInChars(cgm.getASTContext().IntTy);
   gv.setAlignment(alignment.getAsAlign().value());
 
-  if (rd->hasAttr<DLLExportAttr>())
-    gv.setVisibility(mlir::SymbolTable::Visibility::Public);
+  if (rd->hasAttr<DLLImportAttr>())
+    gv.setDLLStorageClass(cir::DLLStorageClass::DLLImportStorageClass);
+  else if (rd->hasAttr<DLLExportAttr>())
+    gv.setDLLStorageClass(cir::DLLStorageClass::DLLExportStorageClass);
 
   if (!gv.hasExternalLinkage())
     emitVBTableDefinition(vbt, rd, gv);

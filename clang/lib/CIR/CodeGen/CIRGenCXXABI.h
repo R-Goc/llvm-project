@@ -260,6 +260,10 @@ public:
   /// Returns true if the thunk should be exported.
   virtual bool exportThunk() = 0;
 
+  virtual void setCXXDestructorDLLStorage(cir::CIRGlobalValueInterface gv,
+                                          const CXXDestructorDecl *dtor,
+                                          CXXDtorType dt) const {}
+
   /// Set the linkage and visibility of a thunk function.
   virtual void setThunkLinkage(cir::FuncOp thunk, bool forVTable, GlobalDecl gd,
                                bool returnAdjustment) = 0;
