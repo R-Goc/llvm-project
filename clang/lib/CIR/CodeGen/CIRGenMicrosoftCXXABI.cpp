@@ -686,7 +686,7 @@ void CIRGenMicrosoftCXXABI::emitCXXStructor(GlobalDecl gd) {
 
   auto fn = cgm.codegenCXXStructor(gd);
   if (cgm.supportsCOMDAT() && cir::isWeakForLinker(fn.getLinkage()))
-    fn.setComdat(true);
+    fn.setSelfComdat();
   else
     cgm.maybeSetTrivialComdat(*dtor, fn);
 }
@@ -1135,7 +1135,7 @@ void CIRGenMicrosoftCXXABI::emitVTableDefinitions(CIRGenVTables &cgvt,
                                  cir::isLocalLinkage(linkage));
     vtable.setLinkage(linkage);
     if (cgm.supportsCOMDAT() && cir::isWeakForLinker(linkage))
-      vtable.setComdat(true);
+      vtable.setSelfComdat();
     cgm.setGVProperties(vtable, rd);
     if (rd->hasAttr<DLLExportAttr>())
       vtable.setDLLStorageClass(cir::DLLStorageClass::DLLExportStorageClass);
@@ -1251,7 +1251,7 @@ void CIRGenMicrosoftCXXABI::emitVBTableDefinition(const VPtrInfo &vbt,
                                          CIRGenModule::getMLIRVisibility(gv));
 
   if (cgm.supportsCOMDAT() && gv.isWeakForLinker())
-    gv.setComdat(true);
+    gv.setSelfComdat();
   cgm.setGVProperties(gv, rd);
 }
 
@@ -1423,7 +1423,7 @@ CIRGenMicrosoftCXXABI::buildVirtualMethodAttr(cir::MethodType methodTy,
                                   ? mlir::SymbolTable::Visibility::Public
                                   : mlir::SymbolTable::Visibility::Private);
     if (md->isExternallyVisible() && cgm.supportsCOMDAT())
-      thunkFuncOp.setComdat(true);
+      thunkFuncOp.setSelfComdat();
 
     cgm.setGVProperties(thunkFuncOp, md);
     if (!exportThunk()) {
@@ -1471,7 +1471,22 @@ CIRGenMicrosoftCXXABI::buildVirtualMethodAttr(cir::MethodType methodTy,
     cgf.emitMustTailThunk(GlobalDecl(md), thisVal, calleeTyped, thunkTy);
   }
 
-  return cgm.getBuilder().getMethodAttr(methodTy, thunkFuncOp);
+  const CXXRecordDecl *rd = md->getParent()->getMostRecentDecl();
+  CharUnits nvAdjustment = ml.VFPtrOffset;
+  unsigned vbTableIndex = 0;
+  if (ml.VBase)
+    vbTableIndex =
+        cgm.getMicrosoftVTableContext().getVBTableIndex(rd, ml.VBase) * 4;
+  if (vbTableIndex == 0 &&
+      rd->getMSInheritanceModel() == MSInheritanceModel::Virtual)
+    nvAdjustment -= cgm.getASTContext().getOffsetOfBaseWithVBPtr(rd);
+  CharUnits vbPtrOffset = CharUnits::Zero();
+  if (vbTableIndex)
+    vbPtrOffset = cgm.getASTContext().getASTRecordLayout(rd).getVBPtrOffset();
+
+  return cgm.getBuilder().getMethodAttr(
+      methodTy, thunkFuncOp, nvAdjustment.getQuantity(),
+      vbPtrOffset.getQuantity(), vbTableIndex);
 }
 
 mlir::Value CIRGenMicrosoftCXXABI::performThisAdjustment(

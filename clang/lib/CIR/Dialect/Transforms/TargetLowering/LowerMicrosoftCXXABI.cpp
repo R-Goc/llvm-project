@@ -217,25 +217,28 @@ public:
     if (model == cir::MSInheritanceModel::Single)
       return fnPtrAttr;
 
-    auto zeroInt = cir::IntAttr::get(i32Ty, 0);
+    auto nvOffsetAttr = cir::IntAttr::get(i32Ty, attr.getNVOffset());
     auto minusOneInt = cir::IntAttr::get(i32Ty, -1);
-    auto vbTableOffsetAttr = attr.isNull() ? minusOneInt : zeroInt;
+    auto vbTableOffsetAttr =
+        attr.isNull() ? minusOneInt
+                      : cir::IntAttr::get(i32Ty, attr.getVBTableOffset());
+    auto vbPtrOffsetAttr = cir::IntAttr::get(i32Ty, attr.getVBPtrOffset());
     auto structTy =
         mlir::cast<cir::StructType>(getMethodLoweredType(methodTy));
 
     if (model == cir::MSInheritanceModel::Multiple) {
       return cir::ConstRecordAttr::get(
-          structTy, mlir::ArrayAttr::get(ctx, {fnPtrAttr, zeroInt}));
+          structTy, mlir::ArrayAttr::get(ctx, {fnPtrAttr, nvOffsetAttr}));
     }
     if (model == cir::MSInheritanceModel::Virtual) {
       return cir::ConstRecordAttr::get(
           structTy,
-          mlir::ArrayAttr::get(ctx, {fnPtrAttr, zeroInt, vbTableOffsetAttr}));
+          mlir::ArrayAttr::get(ctx, {fnPtrAttr, nvOffsetAttr, vbTableOffsetAttr}));
     }
 
     return cir::ConstRecordAttr::get(
         structTy, mlir::ArrayAttr::get(
-                      ctx, {fnPtrAttr, zeroInt, zeroInt, vbTableOffsetAttr}));
+                      ctx, {fnPtrAttr, nvOffsetAttr, vbPtrOffsetAttr, vbTableOffsetAttr}));
   }
 
   mlir::Operation *
@@ -301,11 +304,65 @@ public:
                       .getAddrSpace());
       auto objectBytesPtr = cir::CastOp::create(
           rewriter, loc, bytePtrTy, cir::CastKind::bitcast, loweredObjectPtr);
-      auto adjustedBytesPtr = cir::PtrStrideOp::create(
-          rewriter, loc, bytePtrTy, objectBytesPtr, thisAdj);
-      thisVal = cir::CastOp::create(rewriter, loc,
-                                    loweredObjectPtr.getType(),
-                                    cir::CastKind::bitcast, adjustedBytesPtr);
+
+      if (model == cir::MSInheritanceModel::Multiple) {
+        auto adjustedBytesPtr = cir::PtrStrideOp::create(
+            rewriter, loc, bytePtrTy, objectBytesPtr, thisAdj);
+        thisVal = cir::CastOp::create(rewriter, loc,
+                                      loweredObjectPtr.getType(),
+                                      cir::CastKind::bitcast, adjustedBytesPtr);
+      } else {
+        mlir::Value vbptrOffset;
+        mlir::Value vbtableOffset;
+        if (model == cir::MSInheritanceModel::Virtual) {
+          vbtableOffset = cir::ExtractMemberOp::create(rewriter, loc, i32Ty,
+                                                      loweredMethod, 2);
+        } else {
+          vbptrOffset = cir::ExtractMemberOp::create(rewriter, loc, i32Ty,
+                                                    loweredMethod, 2);
+          vbtableOffset = cir::ExtractMemberOp::create(rewriter, loc, i32Ty,
+                                                      loweredMethod, 3);
+        }
+
+        mlir::Value vbptrBytes = objectBytesPtr;
+        if (vbptrOffset) {
+          vbptrBytes = cir::PtrStrideOp::create(rewriter, loc, bytePtrTy,
+                                               objectBytesPtr, vbptrOffset);
+        }
+
+        auto addrSpace = bytePtrTy.getAddrSpace();
+        auto i32PtrTy = cir::PointerType::get(i32Ty, addrSpace);
+        auto i32PtrPtrTy = cir::PointerType::get(i32PtrTy, addrSpace);
+        auto vbptrTyped = cir::CastOp::create(rewriter, loc, i32PtrPtrTy,
+                                             cir::CastKind::bitcast, vbptrBytes);
+        auto vbtablePtr = cir::LoadOp::create(rewriter, loc, i32PtrTy, vbptrTyped);
+
+        auto twoConst =
+            cir::ConstantOp::create(rewriter, loc, cir::IntAttr::get(i32Ty, 2));
+        auto vbTableIndex = cir::ShiftOp::create(
+            rewriter, loc, i32Ty, vbtableOffset, twoConst, /*isShiftLeft=*/false);
+        auto vbaseEntryPtr = cir::PtrStrideOp::create(rewriter, loc, i32PtrTy,
+                                                     vbtablePtr, vbTableIndex);
+        auto vbaseOffs = cir::LoadOp::create(rewriter, loc, i32Ty, vbaseEntryPtr);
+
+        auto vbaseAdjusted = cir::PtrStrideOp::create(rewriter, loc, bytePtrTy,
+                                                     vbptrBytes, vbaseOffs);
+        auto adjustedWithVBase = cir::PtrStrideOp::create(
+            rewriter, loc, bytePtrTy, vbaseAdjusted, thisAdj);
+
+        auto adjustedNoVBase = cir::PtrStrideOp::create(
+            rewriter, loc, bytePtrTy, objectBytesPtr, thisAdj);
+
+        auto zeroInt =
+            cir::ConstantOp::create(rewriter, loc, cir::IntAttr::get(i32Ty, 0));
+        auto isZero = cir::CmpOp::create(rewriter, loc, cir::CmpOpKind::eq,
+                                         vbtableOffset, zeroInt);
+        auto selectedPtr = cir::SelectOp::create(
+            rewriter, loc, bytePtrTy, isZero, adjustedNoVBase, adjustedWithVBase);
+        thisVal = cir::CastOp::create(rewriter, loc,
+                                      loweredObjectPtr.getType(),
+                                      cir::CastKind::bitcast, selectedPtr);
+      }
     }
 
     callee = cir::CastOp::create(rewriter, loc, op.getCallee().getType(),

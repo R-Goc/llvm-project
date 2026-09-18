@@ -23,24 +23,24 @@ void f(C *c) {
 // CIR32-LABEL: cir.func no_inline dso_local @"?f@num_params@@YAXPAUC@1@@Z"
 // CIR32:         cir.const #cir.const_record<{#cir.global_view<@"??_9C@num_params@@$BA@AE"> : !cir.ptr<!void>, #cir.int<0> : !s32i}>
 // CIR32:         cir.call %{{[0-9]+}}(%{{[0-9]+}}, %{{[0-9]+}}) cc(x86_thiscall)
-// CIR32:         cir.const #cir.const_record<{#cir.global_view<@"??_9C@num_params@@$BA@AE"> : !cir.ptr<!void>, #cir.int<0> : !s32i}>
+// CIR32:         cir.const #cir.const_record<{#cir.global_view<@"??_9C@num_params@@$BA@AE"> : !cir.ptr<!void>, #cir.int<4> : !s32i}>
 // CIR32:         cir.call %{{[0-9]+}}(%{{[0-9]+}}, %{{[0-9]+}}, %{{[0-9]+}}) cc(x86_thiscall)
 
-// CIR32-LABEL: cir.func no_inline comdat linkonce_odr dso_local @"??_9C@num_params@@$BA@AE"(%arg0: !cir.ptr<!rec_num_params3A3AC>{{.*}}, ...) cc(x86_thiscall) attributes {{{.*}}thunk{{.*}}}
+// CIR32-LABEL: cir.func no_inline comdat {{.*}}linkonce_odr dso_local @"??_9C@num_params@@$BA@AE"(%arg0: !cir.ptr<!rec_num_params3A3AC>{{.*}}, ...) cc(x86_thiscall) attributes {{{.*}}thunk{{.*}}}
 // CIR32:         %[[VTABLE:.*]] = cir.load
 // CIR32:         %[[SLOT:.*]] = cir.ptr_stride %[[VTABLE]]
 // CIR32:         %[[CALLEE:.*]] = cir.load
 // CIR32:         %[[CALLEE_TYPED:.*]] = cir.cast bitcast %[[CALLEE]] : !cir.ptr<!void> -> !cir.ptr<!cir.func<(!cir.ptr<!rec_num_params3A3AC>, ...)>>
-// CIR32:         cir.call %[[CALLEE_TYPED]](%arg0) musttail cc(x86_thiscall)
+// CIR32:         cir.call %[[CALLEE_TYPED]](%arg0) cc(x86_thiscall) musttail
 // CIR32:         cir.return
 
 // CIR64-LABEL: cir.func no_inline dso_local @"?f@num_params@@YAXPEAUC@1@@Z"
 // CIR64:         cir.const #cir.const_record<{#cir.global_view<@"??_9C@num_params@@$BA@AA"> : !cir.ptr<!void>, #cir.int<0> : !s32i}>
 // CIR64:         cir.call %{{[0-9]+}}(%{{[0-9]+}}, %{{[0-9]+}})
-// CIR64:         cir.const #cir.const_record<{#cir.global_view<@"??_9C@num_params@@$BA@AA"> : !cir.ptr<!void>, #cir.int<0> : !s32i}>
+// CIR64:         cir.const #cir.const_record<{#cir.global_view<@"??_9C@num_params@@$BA@AA"> : !cir.ptr<!void>, #cir.int<8> : !s32i}>
 // CIR64:         cir.call %{{[0-9]+}}(%{{[0-9]+}}, %{{[0-9]+}}, %{{[0-9]+}})
 
-// CIR64-LABEL: cir.func no_inline comdat linkonce_odr dso_local @"??_9C@num_params@@$BA@AA"(%arg0: !cir.ptr<!rec_num_params3A3AC>{{.*}}, ...) attributes {{{.*}}thunk{{.*}}}
+// CIR64-LABEL: cir.func no_inline comdat {{.*}}linkonce_odr dso_local @"??_9C@num_params@@$BA@AA"(%arg0: !cir.ptr<!rec_num_params3A3AC>{{.*}}, ...) attributes {{{.*}}thunk{{.*}}}
 // CIR64:         %[[VTABLE:.*]] = cir.load
 // CIR64:         %[[SLOT:.*]] = cir.ptr_stride %[[VTABLE]]
 // CIR64:         %[[CALLEE:.*]] = cir.load
@@ -65,24 +65,24 @@ long long f(C *c) {
 // CIR32-LABEL: cir.func no_inline dso_local @"?f@i64_return@@YA_JPAUC@1@@Z"
 // CIR32:         cir.const #cir.const_record<{#cir.global_view<@"??_9C@i64_return@@$BA@AE"> : !cir.ptr<!void>, #cir.int<0> : !s32i}>
 // CIR32:         cir.call %{{[0-9]+}}(%{{[0-9]+}}) cc(x86_thiscall)
-// CIR32:         cir.const #cir.const_record<{#cir.global_view<@"??_9C@i64_return@@$BA@AE"> : !cir.ptr<!void>, #cir.int<0> : !s32i}>
+// CIR32:         cir.const #cir.const_record<{#cir.global_view<@"??_9C@i64_return@@$BA@AE"> : !cir.ptr<!void>, #cir.int<4> : !s32i}>
 // CIR32:         cir.call %{{[0-9]+}}(%{{[0-9]+}}) cc(x86_thiscall)
 
-// CIR32-LABEL: cir.func no_inline comdat linkonce_odr dso_local @"??_9C@i64_return@@$BA@AE"(%arg0: !cir.ptr<!rec_i64_return3A3AC>{{.*}}, ...) cc(x86_thiscall) attributes {{{.*}}thunk{{.*}}}
+// CIR32-LABEL: cir.func no_inline comdat {{.*}}linkonce_odr dso_local @"??_9C@i64_return@@$BA@AE"(%arg0: !cir.ptr<!rec_i64_return3A3AC>{{.*}}, ...) cc(x86_thiscall) attributes {{{.*}}thunk{{.*}}}
 // CIR32:         %[[VTABLE:.*]] = cir.load
 // CIR32:         %[[SLOT:.*]] = cir.ptr_stride %[[VTABLE]]
 // CIR32:         %[[CALLEE:.*]] = cir.load
 // CIR32:         %[[CALLEE_TYPED:.*]] = cir.cast bitcast %[[CALLEE]] : !cir.ptr<!void> -> !cir.ptr<!cir.func<(!cir.ptr<!rec_i64_return3A3AC>, ...)>>
-// CIR32:         cir.call %[[CALLEE_TYPED]](%arg0) musttail cc(x86_thiscall)
+// CIR32:         cir.call %[[CALLEE_TYPED]](%arg0) cc(x86_thiscall) musttail
 // CIR32:         cir.return
 
 // CIR64-LABEL: cir.func no_inline dso_local @"?f@i64_return@@YA_JPEAUC@1@@Z"
 // CIR64:         cir.const #cir.const_record<{#cir.global_view<@"??_9C@i64_return@@$BA@AA"> : !cir.ptr<!void>, #cir.int<0> : !s32i}>
 // CIR64:         cir.call %{{[0-9]+}}(%{{[0-9]+}})
-// CIR64:         cir.const #cir.const_record<{#cir.global_view<@"??_9C@i64_return@@$BA@AA"> : !cir.ptr<!void>, #cir.int<0> : !s32i}>
+// CIR64:         cir.const #cir.const_record<{#cir.global_view<@"??_9C@i64_return@@$BA@AA"> : !cir.ptr<!void>, #cir.int<8> : !s32i}>
 // CIR64:         cir.call %{{[0-9]+}}(%{{[0-9]+}})
 
-// CIR64-LABEL: cir.func no_inline comdat linkonce_odr dso_local @"??_9C@i64_return@@$BA@AA"(%arg0: !cir.ptr<!rec_i64_return3A3AC>{{.*}}, ...) attributes {{{.*}}thunk{{.*}}}
+// CIR64-LABEL: cir.func no_inline comdat {{.*}}linkonce_odr dso_local @"??_9C@i64_return@@$BA@AA"(%arg0: !cir.ptr<!rec_i64_return3A3AC>{{.*}}, ...) attributes {{{.*}}thunk{{.*}}}
 // CIR64:         %[[VTABLE:.*]] = cir.load
 // CIR64:         %[[SLOT:.*]] = cir.ptr_stride %[[VTABLE]]
 // CIR64:         %[[CALLEE:.*]] = cir.load
@@ -107,24 +107,24 @@ void f(C *c) {
 // CIR32-LABEL: cir.func no_inline dso_local @"?f@sret@@YAXPAUC@1@@Z"
 // CIR32:         cir.const #cir.const_record<{#cir.global_view<@"??_9C@sret@@$BA@AE"> : !cir.ptr<!void>, #cir.int<0> : !s32i}>
 // CIR32:         cir.call %{{[0-9]+}}(%{{[0-9]+}}) cc(x86_thiscall)
-// CIR32:         cir.const #cir.const_record<{#cir.global_view<@"??_9C@sret@@$BA@AE"> : !cir.ptr<!void>, #cir.int<0> : !s32i}>
+// CIR32:         cir.const #cir.const_record<{#cir.global_view<@"??_9C@sret@@$BA@AE"> : !cir.ptr<!void>, #cir.int<4> : !s32i}>
 // CIR32:         cir.call %{{[0-9]+}}(%{{[0-9]+}}, %{{[0-9]+}}) cc(x86_thiscall)
 
-// CIR32-LABEL: cir.func no_inline comdat linkonce_odr dso_local @"??_9C@sret@@$BA@AE"(%arg0: !cir.ptr<!rec_sret3A3AC>{{.*}}, ...) cc(x86_thiscall) attributes {{{.*}}thunk{{.*}}}
+// CIR32-LABEL: cir.func no_inline comdat {{.*}}linkonce_odr dso_local @"??_9C@sret@@$BA@AE"(%arg0: !cir.ptr<!rec_sret3A3AC>{{.*}}, ...) cc(x86_thiscall) attributes {{{.*}}thunk{{.*}}}
 // CIR32:         %[[VTABLE:.*]] = cir.load
 // CIR32:         %[[SLOT:.*]] = cir.ptr_stride %[[VTABLE]]
 // CIR32:         %[[CALLEE:.*]] = cir.load
 // CIR32:         %[[CALLEE_TYPED:.*]] = cir.cast bitcast %[[CALLEE]] : !cir.ptr<!void> -> !cir.ptr<!cir.func<(!cir.ptr<!rec_sret3A3AC>, ...)>>
-// CIR32:         cir.call %[[CALLEE_TYPED]](%arg0) musttail cc(x86_thiscall)
+// CIR32:         cir.call %[[CALLEE_TYPED]](%arg0) cc(x86_thiscall) musttail
 // CIR32:         cir.return
 
 // CIR64-LABEL: cir.func no_inline dso_local @"?f@sret@@YAXPEAUC@1@@Z"
 // CIR64:         cir.const #cir.const_record<{#cir.global_view<@"??_9C@sret@@$BA@AA"> : !cir.ptr<!void>, #cir.int<0> : !s32i}>
 // CIR64:         cir.call %{{[0-9]+}}(%{{[0-9]+}})
-// CIR64:         cir.const #cir.const_record<{#cir.global_view<@"??_9C@sret@@$BA@AA"> : !cir.ptr<!void>, #cir.int<0> : !s32i}>
+// CIR64:         cir.const #cir.const_record<{#cir.global_view<@"??_9C@sret@@$BA@AA"> : !cir.ptr<!void>, #cir.int<8> : !s32i}>
 // CIR64:         cir.call %{{[0-9]+}}(%{{[0-9]+}}, %{{[0-9]+}})
 
-// CIR64-LABEL: cir.func no_inline comdat linkonce_odr dso_local @"??_9C@sret@@$BA@AA"(%arg0: !cir.ptr<!rec_sret3A3AC>{{.*}}, ...) attributes {{{.*}}thunk{{.*}}}
+// CIR64-LABEL: cir.func no_inline comdat {{.*}}linkonce_odr dso_local @"??_9C@sret@@$BA@AA"(%arg0: !cir.ptr<!rec_sret3A3AC>{{.*}}, ...) attributes {{{.*}}thunk{{.*}}}
 // CIR64:         %[[VTABLE:.*]] = cir.load
 // CIR64:         %[[SLOT:.*]] = cir.ptr_stride %[[VTABLE]]
 // CIR64:         %[[CALLEE:.*]] = cir.load
@@ -154,10 +154,10 @@ void f(C *c) {
 // CIR32-LABEL: cir.func no_inline dso_local @"?f@cdecl_inalloca@@YAXPAUC@1@@Z"
 // CIR32:         cir.const #cir.const_record<{#cir.global_view<@"??_9C@cdecl_inalloca@@$BA@AA"> : !cir.ptr<!void>, #cir.int<0> : !s32i}>
 // CIR32:         cir.call %{{[0-9]+}}(%{{[0-9]+}})
-// CIR32:         cir.const #cir.const_record<{#cir.global_view<@"??_9C@cdecl_inalloca@@$BA@AA"> : !cir.ptr<!void>, #cir.int<0> : !s32i}>
+// CIR32:         cir.const #cir.const_record<{#cir.global_view<@"??_9C@cdecl_inalloca@@$BA@AA"> : !cir.ptr<!void>, #cir.int<4> : !s32i}>
 // CIR32:         cir.call %{{[0-9]+}}(%{{[0-9]+}}, %{{[0-9]+}})
 
-// CIR32-LABEL: cir.func no_inline comdat linkonce_odr dso_local @"??_9C@cdecl_inalloca@@$BA@AA"(%arg0: !cir.ptr<!rec_cdecl_inalloca3A3AC>{{.*}}, ...) attributes {{{.*}}thunk{{.*}}}
+// CIR32-LABEL: cir.func no_inline comdat {{.*}}linkonce_odr dso_local @"??_9C@cdecl_inalloca@@$BA@AA"(%arg0: !cir.ptr<!rec_cdecl_inalloca3A3AC>{{.*}}, ...) attributes {{{.*}}thunk{{.*}}}
 // CIR32:         %[[VTABLE:.*]] = cir.load
 // CIR32:         %[[SLOT:.*]] = cir.ptr_stride %[[VTABLE]]
 // CIR32:         %[[CALLEE:.*]] = cir.load
@@ -168,10 +168,10 @@ void f(C *c) {
 // CIR64-LABEL: cir.func no_inline dso_local @"?f@cdecl_inalloca@@YAXPEAUC@1@@Z"
 // CIR64:         cir.const #cir.const_record<{#cir.global_view<@"??_9C@cdecl_inalloca@@$BA@AA"> : !cir.ptr<!void>, #cir.int<0> : !s32i}>
 // CIR64:         cir.call %{{[0-9]+}}(%{{[0-9]+}})
-// CIR64:         cir.const #cir.const_record<{#cir.global_view<@"??_9C@cdecl_inalloca@@$BA@AA"> : !cir.ptr<!void>, #cir.int<0> : !s32i}>
+// CIR64:         cir.const #cir.const_record<{#cir.global_view<@"??_9C@cdecl_inalloca@@$BA@AA"> : !cir.ptr<!void>, #cir.int<8> : !s32i}>
 // CIR64:         cir.call %{{[0-9]+}}(%{{[0-9]+}}, %{{[0-9]+}})
 
-// CIR64-LABEL: cir.func no_inline comdat linkonce_odr dso_local @"??_9C@cdecl_inalloca@@$BA@AA"(%arg0: !cir.ptr<!rec_cdecl_inalloca3A3AC>{{.*}}, ...) attributes {{{.*}}thunk{{.*}}}
+// CIR64-LABEL: cir.func no_inline comdat {{.*}}linkonce_odr dso_local @"??_9C@cdecl_inalloca@@$BA@AA"(%arg0: !cir.ptr<!rec_cdecl_inalloca3A3AC>{{.*}}, ...) attributes {{{.*}}thunk{{.*}}}
 // CIR64:         %[[VTABLE:.*]] = cir.load
 // CIR64:         %[[SLOT:.*]] = cir.ptr_stride %[[VTABLE]]
 // CIR64:         %[[CALLEE:.*]] = cir.load
