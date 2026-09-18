@@ -649,8 +649,24 @@ public:
   void setDSOLocal(mlir::Operation *op) const;
   void setDSOLocal(cir::CIRGlobalValueInterface gv) const;
 
+  bool shouldMapVisibilityToDLLExport(const NamedDecl *d) const {
+    return getLangOpts().hasDefaultVisibilityExportMapping() && d &&
+           (d->getLinkageAndVisibility().getVisibility() ==
+            DefaultVisibility) &&
+           (getLangOpts().isAllDefaultVisibilityExportMapping() ||
+            (getLangOpts().isExplicitDefaultVisibilityExportMapping() &&
+             d->getLinkageAndVisibility().isVisibilityExplicit()));
+  }
+  void setDLLImportDLLExport(cir::CIRGlobalValueInterface gv,
+                             GlobalDecl gd) const;
+  void setDLLImportDLLExport(cir::CIRGlobalValueInterface gv,
+                             const NamedDecl *d) const;
+  bool shouldDropDLLAttribute(const Decl *d,
+                              cir::CIRGlobalValueInterface gv) const;
+
   /// Set visibility, dllimport/dllexport and dso_local.
   /// This must be called after dllimport/dllexport is set.
+  void setGVProperties(cir::CIRGlobalValueInterface gv, GlobalDecl gd) const;
   void setGVProperties(mlir::Operation *op, const NamedDecl *d) const;
   void setGVPropertiesAux(mlir::Operation *op, const NamedDecl *d) const;
 

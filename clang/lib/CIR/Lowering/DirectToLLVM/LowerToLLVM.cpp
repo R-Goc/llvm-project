@@ -5842,6 +5842,15 @@ lowerDirectlyFromCIRToLLVMIR(mlir::ModuleOp mlirModule, LLVMContext &llvmCtx,
                              llvm::vfs::FileSystem *fs) {
   llvm::TimeTraceScope scope("lower from CIR to LLVM directly");
 
+  llvm::StringMap<cir::DLLStorageClass> dllStorageClasses;
+  for (auto &op : mlirModule.getOps()) {
+    if (auto gv = mlir::dyn_cast<cir::CIRGlobalValueInterface>(&op)) {
+      if (gv.getDLLStorageClass() != cir::DLLStorageClass::DefaultStorageClass)
+        dllStorageClasses[gv.getNameAttr().getValue()] =
+            gv.getDLLStorageClass();
+    }
+  }
+
   mlir::MLIRContext *mlirCtx = mlirModule.getContext();
 
   mlir::PassManager pm(mlirCtx);
@@ -5876,6 +5885,15 @@ lowerDirectlyFromCIRToLLVMIR(mlir::ModuleOp mlirModule, LLVMContext &llvmCtx,
   if (!llvmModule) {
     // FIXME: Handle any errors where they occurs and return a nullptr here.
     report_fatal_error("Lowering from LLVMIR dialect to llvm IR failed!");
+  }
+
+  for (const auto &entry : dllStorageClasses) {
+    if (llvm::GlobalValue *gv = llvmModule->getNamedValue(entry.first())) {
+      if (entry.second == cir::DLLStorageClass::DLLImportStorageClass)
+        gv->setDLLStorageClass(llvm::GlobalValue::DLLImportStorageClass);
+      else if (entry.second == cir::DLLStorageClass::DLLExportStorageClass)
+        gv->setDLLStorageClass(llvm::GlobalValue::DLLExportStorageClass);
+    }
   }
 
   return llvmModule;

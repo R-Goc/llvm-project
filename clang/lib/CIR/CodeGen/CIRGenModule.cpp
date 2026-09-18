@@ -690,7 +690,7 @@ void CIRGenModule::emitGlobalFunctionDefinition(clang::GlobalDecl gd,
     return;
 
   setFunctionLinkage(gd, funcOp);
-  setGVProperties(funcOp, funcDecl);
+  setGVProperties(funcOp, gd);
   assert(!cir::MissingFeatures::opFuncMaybeHandleStaticInExternC());
   maybeSetTrivialComdat(*funcDecl, funcOp);
   assert(!cir::MissingFeatures::setLLVMFunctionFEnvAttributes());
@@ -809,8 +809,12 @@ CIRGenModule::createGlobalOp(mlir::Location loc, StringRef name, mlir::Type t,
 
 void CIRGenModule::setCommonAttributes(GlobalDecl gd, mlir::Operation *gv) {
   const Decl *d = gd.getDecl();
-  if (isa_and_nonnull<NamedDecl>(d))
-    setGVProperties(gv, dyn_cast<NamedDecl>(d));
+  if (isa_and_nonnull<NamedDecl>(d)) {
+    if (auto gvi = mlir::dyn_cast<cir::CIRGlobalValueInterface>(gv))
+      setGVProperties(gvi, gd);
+    else
+      setGVProperties(gv, dyn_cast<NamedDecl>(d));
+  }
   assert(!cir::MissingFeatures::defaultVisibility());
 
   if (auto gvi = mlir::dyn_cast<cir::CIRGlobalValueInterface>(gv)) {
@@ -1261,7 +1265,13 @@ CIRGenModule::getOrCreateCIRGlobal(StringRef mangledName, mlir::Type ty,
     mlir::ptr::MemorySpaceAttrInterface entryCIRAS = entry.getAddrSpaceAttr();
     assert(!cir::MissingFeatures::opGlobalWeakRef());
 
-    assert(!cir::MissingFeatures::setDLLStorageClass());
+    // Handle dropped DLL attributes.
+    if (d && shouldDropDLLAttribute(
+                 d, mlir::cast<cir::CIRGlobalValueInterface>(
+                        entry.getOperation()))) {
+      entry.setDLLStorageClass(cir::DLLStorageClass::DefaultStorageClass);
+      setDSOLocal(entry.getOperation());
+    }
     assert(!cir::MissingFeatures::openMP());
 
     if (entry.getSymType() == ty &&
@@ -1668,9 +1678,13 @@ void CIRGenModule::emitGlobalVarDefinition(const clang::VarDecl *vd,
 
   // Set CIR linkage and DLL storage class.
   gv.setLinkage(linkage);
-  // FIXME(cir): setLinkage should likely set MLIR's visibility automatically.
   gv.setVisibility(getMLIRVisibilityFromCIRLinkage(linkage));
-  assert(!cir::MissingFeatures::opGlobalDLLImportExport());
+  if (vd->hasAttr<DLLImportAttr>())
+    gv.setDLLStorageClass(cir::DLLStorageClass::DLLImportStorageClass);
+  else if (vd->hasAttr<DLLExportAttr>())
+    gv.setDLLStorageClass(cir::DLLStorageClass::DLLExportStorageClass);
+  else
+    gv.setDLLStorageClass(cir::DLLStorageClass::DefaultStorageClass);
   if (linkage == cir::GlobalLinkageKind::CommonLinkage) {
     // common vars aren't constant even if declared const.
     gv.setConstant(false);
@@ -3004,10 +3018,10 @@ static bool shouldAssumeDSOLocal(const CIRGenModule &cgm,
   if (!gv.hasDefaultVisibility() && !gv.hasExternalWeakLinkage())
     return true;
 
-  // DLLImport explicitly marks the GV as external.
-  // so it shouldn't be dso_local
-  // But we don't have the info set now
-  assert(!cir::MissingFeatures::opGlobalDLLImportExport());
+  // DLLImport explicitly marks the GV as external,
+  // so it shouldn't be dso_local.
+  if (gv.hasDLLImportStorageClass())
+    return false;
 
   const llvm::Triple &tt = cgm.getTriple();
   const CodeGenOptions &cgOpts = cgm.getCodeGenOpts();
@@ -3155,7 +3169,20 @@ void CIRGenModule::setGlobalVisibility(cir::CIRGlobalValueInterface gv,
     return;
   }
 
-  assert(!cir::MissingFeatures::opGlobalDLLImportExport());
+  if (gv.hasDLLExportStorageClass() || gv.hasDLLImportStorageClass()) {
+    // Reject incompatible dllstorage and visibility annotations.
+    if (!lv.isVisibilityExplicit())
+      return;
+    if (gv.hasDLLExportStorageClass()) {
+      if (lv.getVisibility() == HiddenVisibility)
+        getDiags().Report(d->getLocation(),
+                          diag::err_hidden_visibility_dllexport);
+    } else if (lv.getVisibility() != DefaultVisibility) {
+      getDiags().Report(d->getLocation(),
+                        diag::err_non_default_visibility_dllimport);
+    }
+    return;
+  }
 
   if (lv.isVisibilityExplicit() || getLangOpts().SetVisibilityForExternDecls ||
       !gv.isDeclarationForLinker())
@@ -3171,9 +3198,52 @@ void CIRGenModule::setDSOLocal(mlir::Operation *op) const {
     setDSOLocal(globalValue);
 }
 
+void CIRGenModule::setDLLImportDLLExport(cir::CIRGlobalValueInterface gv,
+                                        GlobalDecl gd) const {
+  const auto *d = dyn_cast_or_null<NamedDecl>(gd.getDecl());
+  if (const auto *dtor = dyn_cast_or_null<CXXDestructorDecl>(d)) {
+    getCXXABI().setCXXDestructorDLLStorage(gv, dtor, gd.getDtorType());
+    return;
+  }
+  setDLLImportDLLExport(gv, d);
+}
+
+void CIRGenModule::setDLLImportDLLExport(cir::CIRGlobalValueInterface gv,
+                                        const NamedDecl *d) const {
+  if (d && d->isExternallyVisible()) {
+    if (d->hasAttr<DLLImportAttr>())
+      gv.setDLLStorageClass(cir::DLLStorageClass::DLLImportStorageClass);
+    else if ((d->hasAttr<DLLExportAttr>() ||
+              shouldMapVisibilityToDLLExport(d)) &&
+             !gv.isDeclarationForLinker())
+      gv.setDLLStorageClass(cir::DLLStorageClass::DLLExportStorageClass);
+  }
+}
+
+bool CIRGenModule::shouldDropDLLAttribute(
+    const Decl *d, cir::CIRGlobalValueInterface gv) const {
+  auto sc = gv.getDLLStorageClass();
+  if (sc == cir::DLLStorageClass::DefaultStorageClass)
+    return false;
+  const Decl *mrd = d->getMostRecentDecl();
+  return (((sc == cir::DLLStorageClass::DLLImportStorageClass &&
+            !mrd->hasAttr<DLLImportAttr>()) ||
+           (sc == cir::DLLStorageClass::DLLExportStorageClass &&
+            !mrd->hasAttr<DLLExportAttr>())) &&
+          !shouldMapVisibilityToDLLExport(cast<NamedDecl>(mrd)));
+}
+
+void CIRGenModule::setGVProperties(cir::CIRGlobalValueInterface gv,
+                                   GlobalDecl gd) const {
+  setDLLImportDLLExport(gv, gd);
+  setGVPropertiesAux(gv.getOperation(),
+                     dyn_cast_or_null<NamedDecl>(gd.getDecl()));
+}
+
 void CIRGenModule::setGVProperties(mlir::Operation *op,
                                    const NamedDecl *d) const {
-  assert(!cir::MissingFeatures::opGlobalDLLImportExport());
+  if (auto gv = dyn_cast<cir::CIRGlobalValueInterface>(op))
+    setDLLImportDLLExport(gv, d);
   setGVPropertiesAux(op, d);
 }
 
@@ -3303,6 +3373,7 @@ void CIRGenModule::setFunctionAttributes(GlobalDecl globalDecl,
 
   // Mirrors setLinkageForGV in CodeGenModule::SetFunctionAttributes.
   setLinkageForFunction(*this, func, funcDecl);
+  setDLLImportDLLExport(func, globalDecl);
 
   // If we plan on emitting this inline builtin, we can't treat it as a builtin.
   if (funcDecl->isInlineBuiltinDeclaration()) {
@@ -3553,8 +3624,10 @@ cir::FuncOp CIRGenModule::getOrCreateCIRFunction(
     assert(!cir::MissingFeatures::weakRefReference());
 
     // Handle dropped DLL attributes.
-    if (d && !d->hasAttr<DLLImportAttr>() && !d->hasAttr<DLLExportAttr>()) {
-      assert(!cir::MissingFeatures::setDLLStorageClass());
+    if (d && shouldDropDLLAttribute(
+                 d, mlir::cast<cir::CIRGlobalValueInterface>(entry))) {
+      mlir::cast<cir::CIRGlobalValueInterface>(entry).setDLLStorageClass(
+          cir::DLLStorageClass::DefaultStorageClass);
       setDSOLocal(entry);
     }
 
@@ -4297,7 +4370,6 @@ CIRGenModule::getAddrOfGlobalTemporary(const MaterializeTemporaryExpr *mte,
   // Don't assign dllimport or dllexport to local linkage globals
   if (!gv.hasLocalLinkage()) {
     setGVProperties(gv, varDecl);
-    assert(!cir::MissingFeatures::setDLLStorageClass());
   }
 
   gv.setAlignment(align.getAsAlign().value());

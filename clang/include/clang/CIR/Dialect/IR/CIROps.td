@@ -3405,6 +3405,10 @@ def CIR_GlobalOp : CIR_RegionBranchOpBase<"global", [
                        UnitProp:$comdat,
                        UnitProp:$constant,
                        UnitProp:$dso_local,
+                       DefaultValuedProp<
+                        EnumProp<CIR_DLLStorageClass>,
+                        "cir::DLLStorageClass::DefaultStorageClass"
+                       >:$dll_storage_class,
                        OptionalAttr<CIR_StaticLocalGuardAttr>:$static_local_guard,
                        OptionalAttr<I64Attr>:$alignment,
                        OptionalAttr<ASTVarDeclInterface>:$ast,
@@ -3428,6 +3432,7 @@ def CIR_GlobalOp : CIR_RegionBranchOpBase<"global", [
     (`tls_model` `=` enum($tls_model)^)?
     (`tls_refs` `=` $tls_refs^)?
     (`dso_local` $dso_local^)?
+    ($dll_storage_class^)?
     (`static_local_guard` `` $static_local_guard^)?
     (` ` custom<GlobalMemorySpace>($addr_space)^ )?
     $sym_name
@@ -3439,6 +3444,15 @@ def CIR_GlobalOp : CIR_RegionBranchOpBase<"global", [
   }];
 
   let extraClassDeclaration = [{
+    cir::DLLStorageClass getDLLStorageClass() { return getDllStorageClass(); }
+    void setDLLStorageClass(cir::DLLStorageClass val) { setDllStorageClass(val); }
+    bool hasDLLImportStorageClass() {
+      return getDllStorageClass() == cir::DLLStorageClass::DLLImportStorageClass;
+    }
+    bool hasDLLExportStorageClass() {
+      return getDllStorageClass() == cir::DLLStorageClass::DLLExportStorageClass;
+    }
+
     bool isDeclaration() {
       // Aliases are always definitions.
       if (getAliasee())
@@ -4280,6 +4294,10 @@ def CIR_FuncOp : CIR_Op<"func", [
       EnumProp<CIR_VisibilityKind>,
       "cir::VisibilityKind::Default"
     >:$global_visibility,
+    DefaultValuedProp<
+      EnumProp<CIR_DLLStorageClass>,
+      "cir::DLLStorageClass::DefaultStorageClass"
+    >:$dll_storage_class,
     TypeAttrOf<CIR_FuncType>:$function_type,
     UnitAttr:$builtin,
     UnitAttr:$coroutine,
@@ -4319,6 +4337,15 @@ def CIR_FuncOp : CIR_Op<"func", [
   >];
 
   let extraClassDeclaration = [{
+    cir::DLLStorageClass getDLLStorageClass() { return getDllStorageClass(); }
+    void setDLLStorageClass(cir::DLLStorageClass val) { setDllStorageClass(val); }
+    bool hasDLLImportStorageClass() {
+      return getDllStorageClass() == cir::DLLStorageClass::DLLImportStorageClass;
+    }
+    bool hasDLLExportStorageClass() {
+      return getDllStorageClass() == cir::DLLStorageClass::DLLExportStorageClass;
+    }
+
     /// Returns the region on the current operation that is callable. This may
     /// return null in the case of an external callable object, e.g. an external
     /// function.

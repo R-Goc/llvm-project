@@ -193,6 +193,36 @@ let cppNamespace = "::cir" in {
       }]
       >,
       InterfaceMethod<"",
+      "cir::VisibilityKind", "getGlobalVisibility", (ins), [{}],
+      /*defaultImplementation=*/[{
+        return $_op.getGlobalVisibility();
+      }]
+      >,
+      InterfaceMethod<"",
+      "cir::DLLStorageClass", "getDLLStorageClass", (ins), [{}],
+      /*defaultImplementation=*/[{
+        return $_op.getDllStorageClass();
+      }]
+      >,
+      InterfaceMethod<"",
+      "void", "setDLLStorageClass", (ins "cir::DLLStorageClass":$val), [{}],
+      /*defaultImplementation=*/[{
+        $_op.setDllStorageClass(val);
+      }]
+      >,
+      InterfaceMethod<"",
+      "bool", "hasDLLImportStorageClass", (ins), [{}],
+      /*defaultImplementation=*/[{
+        return $_op.getDllStorageClass() == cir::DLLStorageClass::DLLImportStorageClass;
+      }]
+      >,
+      InterfaceMethod<"",
+      "bool", "hasDLLExportStorageClass", (ins), [{}],
+      /*defaultImplementation=*/[{
+        return $_op.getDllStorageClass() == cir::DLLStorageClass::DLLExportStorageClass;
+      }]
+      >,
+      InterfaceMethod<"",
       "bool", "isDSOLocal", (ins), [{}],
       /*defaultImplementation=*/[{
         return $_op.getDsoLocal();

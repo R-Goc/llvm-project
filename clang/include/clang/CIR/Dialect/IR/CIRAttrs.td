@@ -1405,6 +1405,18 @@ def CIR_VisibilityKind : CIR_I32Enum<"VisibilityKind", "C/C++ visibility", [
 ]>;
 
 //===----------------------------------------------------------------------===//
+// DLLStorageClass
+//===----------------------------------------------------------------------===//
+
+def CIR_DLLStorageClass : CIR_I32Enum<"DLLStorageClass", "DLL storage class", [
+  I32EnumCase<"DefaultStorageClass", 0, "default">,
+  I32EnumCase<"DLLImportStorageClass", 1, "dllimport">,
+  I32EnumCase<"DLLExportStorageClass", 2, "dllexport">
+]>;
+
+def CIR_DLLStorageClassAttr : CIR_EnumAttr<CIR_DLLStorageClass, "dll_storage_class">;
+
+//===----------------------------------------------------------------------===//
 // GloblCtorAttr
 //===----------------------------------------------------------------------===//
 

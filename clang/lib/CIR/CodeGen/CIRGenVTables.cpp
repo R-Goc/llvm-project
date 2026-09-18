@@ -43,7 +43,7 @@ static void setThunkProperties(CIRGenModule &cgm, const ThunkInfo &thunk,
   cgm.setGVProperties(thunkFn, cast<NamedDecl>(gd.getDecl()));
 
   if (!cgm.getCXXABI().exportThunk()) {
-    assert(!cir::MissingFeatures::setDLLStorageClass());
+    thunkFn.setDLLStorageClass(cir::DLLStorageClass::DefaultStorageClass);
     cgm.setDSOLocal(static_cast<mlir::Operation *>(thunkFn));
   }
 
