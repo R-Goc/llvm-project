@@ -11,6 +11,8 @@
 // CIR-DAG: cir.global "private" constant weak_odr comdat dso_local dllexport @"??_7ExportedClass@@6B@" = #cir.vtable<
 // CIR-DAG: cir.global constant weak_odr comdat dso_local dllexport @"??_8ExportedVBase@@7B@" = #cir.const_array<
 // CIR-DAG: cir.global "private" constant weak_odr comdat dso_local dllexport @"??_7ExportedVBase@@6B@" = #cir.vtable<
+// CIR-DAG: cir.global weak_odr comdat dso_local dllexport @"?x@?1??inlineStaticLocalsFunc@@YAHXZ@4HA" =
+// CIR-DAG: cir.global "private" weak_odr comdat dso_local dllexport @"?$TSS{{.*}}@?1??inlineStaticLocalsFunc@@YAHXZ@4HA" =
 
 __declspec(dllexport) int exported_var = 42;
 
@@ -63,6 +65,36 @@ ExportedVBase::~ExportedVBase() {}
 void use_vbase(ExportedVBase *evb) {
   evb->~ExportedVBase();
 }
+
+//===----------------------------------------------------------------------===//
+// Exported Inline Functions with Static Locals & Guards
+//===----------------------------------------------------------------------===//
+
+int get_val();
+inline int __declspec(dllexport) inlineStaticLocalsFunc() {
+  static int x = 42;
+  static int y = get_val();
+  return x++ + y;
+}
+
+void use_inline_static() {
+  inlineStaticLocalsFunc();
+}
+
+// CIR-LABEL: cir.func {{.*}} comdat weak_odr dso_local dllexport @"?inlineStaticLocalsFunc@@YA{{.*}}"()
+
+//===----------------------------------------------------------------------===//
+// Explicit Class Template Instantiation
+//===----------------------------------------------------------------------===//
+
+template <typename T>
+struct S {
+  void f() {}
+};
+
+template struct __declspec(dllexport) S<int>;
+
+// CIR-LABEL: cir.func {{.*}} comdat weak_odr dso_local dllexport @"?f@?$S@H@@Q{{.*}}XXZ"
 
 // Vector/scalar deleting destructor must NOT have dllexport:
 // In 64-bit it's ??_E, in 32-bit it's ??_G. Both must have no dllexport before the symbol.

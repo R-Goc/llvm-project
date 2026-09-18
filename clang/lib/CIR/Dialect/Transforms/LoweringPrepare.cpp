@@ -298,6 +298,7 @@ struct LoweringPreparePass
       guard.setDSOLocal(globalOp.getDsoLocal());
       guard.setAlignment(guardAlignment.getAsAlign().value());
       guard.setTlsModel(globalOp.getTlsModel());
+      guard.setDLLStorageClass(globalOp.getDLLStorageClass());
 
       if (astCtx &&
           astCtx->getCXXABIKind() == clang::TargetCXXABI::Microsoft) {

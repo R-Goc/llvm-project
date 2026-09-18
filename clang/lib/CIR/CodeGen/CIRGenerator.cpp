@@ -150,6 +150,20 @@ void CIRGenerator::HandleTagDeclDefinition(TagDecl *d) {
     }
   }
 
+  // Emit dllexport inherited constructors. These are synthesized during
+  // Sema (in checkClassLevelDLLAttribute) but have no written definition,
+  // so they must be emitted now while visiting the class definition.
+  if (auto *rd = dyn_cast<CXXRecordDecl>(d);
+      rd && rd->hasAttr<DLLExportAttr>()) {
+    for (Decl *member : rd->decls()) {
+      if (auto *cd = dyn_cast<CXXConstructorDecl>(member)) {
+        if (cd->getInheritedConstructor() && cd->hasAttr<DLLExportAttr>() &&
+            !cd->isDeleted())
+          cgm->emitTopLevelDecl(cd);
+      }
+    }
+  }
+
   // For OpenMP emit declare reduction functions or declare mapper, if
   // required.
   if (astContext->getLangOpts().OpenMP) {
