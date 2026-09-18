@@ -1137,6 +1137,11 @@ void CIRGenMicrosoftCXXABI::emitVTableDefinitions(CIRGenVTables &cgvt,
     if (cgm.supportsCOMDAT() && cir::isWeakForLinker(linkage))
       vtable.setComdat(true);
     cgm.setGVProperties(vtable, rd);
+    if (rd->hasAttr<DLLExportAttr>())
+      vtable.setDLLStorageClass(cir::DLLStorageClass::DLLExportStorageClass);
+    else
+      vtable.setDLLStorageClass(cir::DLLStorageClass::DefaultStorageClass);
+    cgm.setDSOLocal(static_cast<mlir::Operation *>(vtable));
   }
 }
 
@@ -1421,8 +1426,10 @@ CIRGenMicrosoftCXXABI::buildVirtualMethodAttr(cir::MethodType methodTy,
       thunkFuncOp.setComdat(true);
 
     cgm.setGVProperties(thunkFuncOp, md);
-    if (!exportThunk())
+    if (!exportThunk()) {
+      thunkFuncOp.setDLLStorageClass(cir::DLLStorageClass::DefaultStorageClass);
       cgm.setDSOLocal(static_cast<mlir::Operation *>(thunkFuncOp));
+    }
 
     cgm.setCIRFunctionAttributes(GlobalDecl(md), thunkFnInfo, thunkFuncOp,
                                  /*isThunk=*/false);

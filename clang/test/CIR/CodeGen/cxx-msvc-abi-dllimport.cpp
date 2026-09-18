@@ -1,6 +1,6 @@
-// RUN: %clang_cc1 -std=c++17 -triple x86_64-pc-windows-msvc -fms-extensions -fms-compatibility -fclangir -emit-cir %s -o %t64.cir
+// RUN: %clang_cc1 -std=c++17 -triple x86_64-pc-windows-msvc -fms-extensions -fms-compatibility -fclangir -O1 -emit-cir %s -o %t64.cir
 // RUN: FileCheck --input-file=%t64.cir --check-prefix=CIR %s
-// RUN: %clang_cc1 -std=c++17 -triple i386-pc-windows-msvc -fms-extensions -fms-compatibility -fclangir -emit-cir %s -o %t32.cir
+// RUN: %clang_cc1 -std=c++17 -triple i386-pc-windows-msvc -fms-extensions -fms-compatibility -fclangir -O1 -emit-cir %s -o %t32.cir
 // RUN: FileCheck --input-file=%t32.cir --check-prefix=CIR %s
 
 //===----------------------------------------------------------------------===//
@@ -9,6 +9,7 @@
 
 // CIR-DAG: cir.global "private" external dllimport @"?imported_var@@3HA" : !s32i
 // CIR-DAG: cir.global constant available_externally dllimport @"??_8ImportedVBase@@7B@" = #cir.const_array<
+// CIR-DAG: cir.global "private" constant linkonce_odr comdat dso_local @"??_SU@@6B@" = #cir.vtable<
 
 __declspec(dllimport) extern int imported_var;
 __declspec(dllimport) void imported_func();
@@ -45,4 +46,17 @@ struct __declspec(dllimport) ImportedVBase : virtual Base {
 
 void use_imported_vbase(ImportedVBase *p) {
   ImportedVBase obj;
+}
+
+//===----------------------------------------------------------------------===//
+// Imported Class with Virtual Method (Local VFTable)
+//===----------------------------------------------------------------------===//
+
+struct __declspec(dllimport) U {
+  virtual ~U();
+};
+
+// CIR-LABEL: cir.func {{.*}} @"?test_u@@YA{{.*}}"
+void test_u() {
+  U u;
 }

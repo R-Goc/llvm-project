@@ -266,9 +266,6 @@ struct LoweringPreparePass
                                     cir::IntType guardTy,
                                     cir::GlobalLinkageKind linkage);
 
-  /// Append 'global' to the module's llvm.used list to make sure it doesn't get
-  /// garbage-collected by the linker.
-  void addUsedGlobal(cir::GlobalOp global);
 
   /// Get the guard variable for a static local declaration.
   cir::GlobalOp getStaticLocalDeclGuardAddress(llvm::StringRef globalSymName) {
@@ -294,7 +291,7 @@ struct LoweringPreparePass
     clang::CharUnits guardAlignment;
     // Guard variables are 32-bit in MSVC ABI, 64 bits in the generic ABI, and
     // size width on ARM (i.e. 32-bit on AArch32, 64-bit on AArch64).
-    if (astCtx && astCtx->getCXXABIKind() == clang::TargetCXXABI::Microsoft) {
+    if (getTargetInfo().getCXXABI().isMicrosoft()) {
       guardTy = cir::IntType::get(&getContext(), 32, /*isSigned=*/true);
       guardAlignment = clang::CharUnits::fromQuantity(4);
     } else if (useInt8GuardVariable) {
@@ -326,8 +323,8 @@ struct LoweringPreparePass
       guard.setAlignment(guardAlignment.getAsAlign().value());
       guard.setTlsModel(globalOp.getTlsModel());
       guard.setGlobalVisibility(globalOp.getGlobalVisibility());
+      guard.setDLLStorageClass(globalOp.getDLLStorageClass());
 
-<<<<<<< HEAD
       // The ABI says: "It is suggested that it be emitted in the same COMDAT
       // group as the associated data object." In practice, this doesn't work
       // for non-ELF and non-Wasm object formats, so only do it for ELF and
@@ -341,28 +338,6 @@ struct LoweringPreparePass
         // A weak guard that isn't joining the variable's COMDAT gets its own,
         // even if the variable has none (such as a plain weak variable).
         guard.setSelfComdat();
-=======
-      if (astCtx &&
-          astCtx->getCXXABIKind() == clang::TargetCXXABI::Microsoft) {
-        if (globalOp.isWeakForLinker())
-          guard.setComdat(true);
-      } else {
-        // The ABI says: "It is suggested that it be emitted in the same COMDAT
-        // group as the associated data object." In practice, this doesn't work
-        // for non-ELF and non-Wasm object formats, so only do it for ELF and
-        // Wasm.
-        bool hasComdat = globalOp.getComdat();
-        const llvm::Triple &triple = astCtx->getTargetInfo().getTriple();
-        // TODO(cir): for now, we're just setting comdat to true, but it should
-        // contain a comdat reference name here instead.
-        if (!isLocalVarDecl && hasComdat &&
-            (triple.isOSBinFormatELF() || triple.isOSBinFormatWasm())) {
-          // This should be a comdat for the variable.
-          guard.setComdat(true);
-        } else if (hasComdat && globalOp.isWeakForLinker()) {
-          guard.setComdat(true);
-        }
->>>>>>> 85b7be69e06f ([CIR][MSVC] Implement thread-safe and TLS local static initializers)
       }
 
       setStaticLocalDeclGuardAddress(globalSymName, guard);
@@ -520,7 +495,7 @@ struct LoweringPreparePass
                                    cir::GlobalOp global,
                                    mlir::Region &dtorRegion, bool tls,
                                    mlir::Block &entryBB) {
-    if (astCtx->getCXXABIKind() == clang::TargetCXXABI::Microsoft) {
+    if (getTargetInfo().getCXXABI().isMicrosoft()) {
       // In Microsoft ABI, destructors are registered via standard atexit with
       // a nullary stub:
       //   int atexit(void (*func)(void));
@@ -535,9 +510,10 @@ struct LoweringPreparePass
       {
         llvm::raw_svector_ostream out(stubName);
         std::unique_ptr<clang::MangleContext> mangleCtx(
-            astCtx->createMangleContext());
+            varDecl->getASTContext().createMangleContext());
         mangleCtx->mangleDynamicAtExitDestructor(varDecl, out);
       }
+
 
       // Create nullary dtor stub function: void ??__F...()
       cir::CIRBaseBuilderTy globalBuilder(getContext());
@@ -1503,20 +1479,22 @@ LoweringPreparePass::buildCXXGlobalVarDeclInitFunc(cir::GlobalOp op) {
           mlir::dyn_cast_or_null<cir::ASTVarDeclAttr>(op.getAstAttr()))
     varDecl = astVarDecl.getAst();
 
-  if (astCtx->getCXXABIKind() == clang::TargetCXXABI::Microsoft) {
+  if (getTargetInfo().getCXXABI().isMicrosoft()) {
     assert(varDecl && "Expected VarDecl for MSVC dynamic initializer");
+    clang::ASTContext &astCtx = varDecl->getASTContext();
     llvm::raw_svector_ostream out(fnName);
     std::unique_ptr<clang::MangleContext> mangleCtx(
-        astCtx->createMangleContext());
+        astCtx.createMangleContext());
     mangleCtx->mangleDynamicInitializer(varDecl, out);
 
     if (clang::isTemplateInstantiation(
             varDecl->getTemplateSpecializationKind()) ||
-        !clang::isUniqueGVALinkage(astCtx->GetGVALinkageForVariable(varDecl)) ||
+        !clang::isUniqueGVALinkage(astCtx.GetGVALinkageForVariable(varDecl)) ||
         varDecl->hasAttr<clang::SelectAnyAttr>()) {
       linkage = cir::GlobalLinkageKind::LinkOnceODRLinkage;
     }
   }
+
 
   if (fnName.empty()) {
     fnName = "__cxx_global_var_init";
@@ -1533,7 +1511,7 @@ LoweringPreparePass::buildCXXGlobalVarDeclInitFunc(cir::GlobalOp op) {
   FuncOp f =
       buildRuntimeFunction(builder, fnName, op.getLoc(), fnType, linkage);
   if (linkage == cir::GlobalLinkageKind::LinkOnceODRLinkage)
-    f.setComdat(true);
+    f.setSelfComdat();
 
   // Forward the constrained floating-point marker recorded on the global by
   // CodeGen onto the generated initializer function. The marker on the global
@@ -1805,7 +1783,7 @@ void LoweringPreparePass::handleStaticLocalMicrosoft(
   };
 
   bool isTLS = info.getTls() != cir::TLSKind::None;
-  bool threadsafe = astCtx->getLangOpts().ThreadsafeStatics;
+  bool threadsafe = getLangOpts().ThreadsafeStatics;
   bool hasPerVariableGuard = threadsafe && !isTLS;
 
   if (hasPerVariableGuard) {
@@ -1854,7 +1832,7 @@ void LoweringPreparePass::handleStaticLocalMicrosoft(
         mlir::OpBuilder::InsertionGuard innerInsertGuard(builder);
         builder.setInsertionPointToStart(&innerIfOp.getThenRegion().front());
 
-        if (astCtx->getLangOpts().Exceptions) {
+        if (getLangOpts().Exceptions) {
           cir::CleanupScopeOp::create(
               builder, loc, cir::CleanupKind::EH,
               [&](mlir::OpBuilder &, mlir::Location bodyLoc) {
@@ -1902,7 +1880,8 @@ void LoweringPreparePass::handleStaticLocalMicrosoft(
       mlir::Value orVal = builder.createOr(loc, guardVal, one);
       builder.createStore(loc, orVal, guardPtr);
 
-      if (astCtx->getLangOpts().Exceptions) {
+      if (getLangOpts().Exceptions) {
+
         cir::CleanupScopeOp::create(
             builder, loc, cir::CleanupKind::EH,
             [&](mlir::OpBuilder &, mlir::Location bodyLoc) {
@@ -1993,7 +1972,7 @@ void LoweringPreparePass::emitGuardedInit(CIRBaseBuilderTy &builder,
     return;
   }
 
-  if (astCtx && astCtx->getCXXABIKind() == clang::TargetCXXABI::Microsoft) {
+  if (getTargetInfo().getCXXABI().isMicrosoft()) {
     handleStaticLocalMicrosoft(builder, globalOp, ctorRegion, dtorRegion, guard,
                                info);
     return;
@@ -2272,8 +2251,8 @@ void LoweringPreparePass::lowerGlobalOp(GlobalOp op) {
     const clang::InitSegAttr *isa =
         varDecl ? varDecl->getAttr<clang::InitSegAttr>() : nullptr;
 
-    if (op.getTlsModel() && !op.getStaticLocalGuard().has_value()) {
-      if (astCtx && astCtx->getCXXABIKind() == clang::TargetCXXABI::Microsoft) {
+    if (op.getTlsModel()) {
+      if (getTargetInfo().getCXXABI().isMicrosoft()) {
         if (f.getLinkage() == cir::GlobalLinkageKind::LinkOnceODRLinkage ||
             op.getComdat()) {
           CIRBaseBuilderTy modBuilder(getContext());
@@ -2288,7 +2267,7 @@ void LoweringPreparePass::lowerGlobalOp(GlobalOp op) {
           fnPtrOp.setSectionAttr(modBuilder.getStringAttr(".CRT$XDU"));
           fnPtrOp.setInitialValueAttr(cir::GlobalViewAttr::get(
               fnPtrTy, mlir::FlatSymbolRefAttr::get(f.getSymNameAttr())));
-          fnPtrOp.setComdat(true);
+          fnPtrOp.setComdat(f.getSymName());
 
           symbolTables.getSymbolTable(mlirModule).insert(fnPtrOp);
           addUsedGlobal(fnPtrOp);
@@ -2335,14 +2314,14 @@ void LoweringPreparePass::lowerGlobalOp(GlobalOp op) {
       fnPtrOp.setSectionAttr(modBuilder.getStringAttr(isa->getSection()));
       fnPtrOp.setInitialValueAttr(cir::GlobalViewAttr::get(
           fnPtrTy, mlir::FlatSymbolRefAttr::get(f.getSymNameAttr())));
-      if (op.getComdat())
-        fnPtrOp.setComdat(true);
+      if (std::optional<llvm::StringRef> comdat = op.getComdat())
+        fnPtrOp.setComdat(comdat->empty() ? op.getSymName() : *comdat);
       fnPtrOp.setPrivate();
 
       symbolTables.getSymbolTable(mlirModule).insert(fnPtrOp);
       addUsedGlobal(fnPtrOp);
     } else if (std::optional<uint32_t> priority = op.getInitPriority()) {
-      if (astCtx && astCtx->getCXXABIKind() == clang::TargetCXXABI::Microsoft) {
+      if (getTargetInfo().getCXXABI().isMicrosoft()) {
         globalCtorList.emplace_back(f.getSymName(), *priority);
       } else {
         prioritizedDynamicInitializers[*priority].push_back(f);
@@ -2529,42 +2508,6 @@ void LoweringPreparePass::buildGlobalCtorDtorList() {
   }
 }
 
-void LoweringPreparePass::addUsedGlobal(cir::GlobalOp gv) {
-  CIRBaseBuilderTy builder(getContext());
-  cir::PointerType voidPtrTy = builder.getVoidPtrTy();
-  mlir::Attribute newElem = cir::GlobalViewAttr::get(
-      voidPtrTy, mlir::FlatSymbolRefAttr::get(gv.getSymNameAttr()));
-
-  auto usedOp = symbolTables.lookupSymbolIn<cir::GlobalOp>(
-      mlirModule, mlir::StringAttr::get(&getContext(), "llvm.used"));
-  SmallVector<mlir::Attribute> usedArray;
-  if (usedOp) {
-    if (auto initAttr = mlir::dyn_cast_or_null<cir::ConstArrayAttr>(
-            usedOp.getInitialValueAttr())) {
-      if (auto arr = mlir::dyn_cast<mlir::ArrayAttr>(initAttr.getElts()))
-        usedArray.append(arr.begin(), arr.end());
-    }
-    usedArray.push_back(newElem);
-    cir::ArrayType arrayTy = cir::ArrayType::get(voidPtrTy, usedArray.size());
-    cir::ConstArrayAttr initAttr = cir::ConstArrayAttr::get(
-        arrayTy, mlir::ArrayAttr::get(&getContext(), usedArray));
-    usedOp.setSymType(arrayTy);
-    usedOp.setInitialValueAttr(initAttr);
-  } else {
-    usedArray.push_back(newElem);
-    cir::ArrayType arrayTy = cir::ArrayType::get(voidPtrTy, usedArray.size());
-    cir::ConstArrayAttr initAttr = cir::ConstArrayAttr::get(
-        arrayTy, mlir::ArrayAttr::get(&getContext(), usedArray));
-    CIRBaseBuilderTy modBuilder(getContext());
-    modBuilder.setInsertionPointToEnd(mlirModule.getBody());
-    cir::GlobalOp newUsedOp = cir::GlobalOp::create(
-        modBuilder, mlirModule.getLoc(), "llvm.used", arrayTy,
-        /*isConstant=*/false, {}, cir::GlobalLinkageKind::AppendingLinkage);
-    newUsedOp.setInitialValueAttr(initAttr);
-    newUsedOp.setSectionAttr(modBuilder.getStringAttr("llvm.metadata"));
-    symbolTables.getSymbolTable(mlirModule).insert(newUsedOp);
-  }
-}
 
 cir::GlobalOp
 LoweringPreparePass::createGlobalThreadLocalGuard(CIRBaseBuilderTy &builder,
@@ -2621,7 +2564,7 @@ cir::IfOp LoweringPreparePass::buildInitGuardCheck(CIRBaseBuilderTy &builder,
 }
 
 void LoweringPreparePass::buildCXXGlobalTlsFunc() {
-  if (astCtx && astCtx->getCXXABIKind() == clang::TargetCXXABI::Microsoft) {
+  if (getTargetInfo().getCXXABI().isMicrosoft()) {
     if (msvcThreadLocalInitializers.empty())
       return;
 
