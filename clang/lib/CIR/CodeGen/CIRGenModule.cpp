@@ -4289,6 +4289,11 @@ void CIRGenModule::emitAliasDefinition(GlobalDecl gd) {
   mlir::SymbolTable::setSymbolVisibility(alias, visibility);
   assert(!cir::MissingFeatures::opGlobalThreadLocal());
   setCommonAttributes(gd, alias);
+  if (isFunction) {
+    auto funcOp = mlir::cast<cir::FuncOp>(alias.getOperation());
+    const CIRGenFunctionInfo &fi = getTypes().arrangeGlobalDeclaration(gd);
+    funcOp.setCallingConv(fi.getCallingConvention());
+  }
   assert(!cir::MissingFeatures::generateDebugInfo());
 }
 
@@ -4310,6 +4315,7 @@ void CIRGenModule::emitAliasForGlobal(StringRef mangledName,
   cir::FuncOp alias =
       createCIRFunction(getLoc(aliasGD.getDecl()->getSourceRange()),
                         mangledName, fnType, aliasFD);
+  alias.setCallingConv(fnInfo.getCallingConvention());
   alias.setAliasee(aliasee.getName());
   alias.setLinkage(linkage);
   // Declarations cannot have public MLIR visibility, just mark them private
@@ -4795,7 +4801,7 @@ CIRGenModule::getOrCreateMSVCGlobalDeleteWrapper(const FunctionDecl *globOD) {
   if (!emptyFn) {
     emptyFn = createCIRFunction(loc, emptyGlobalDeleteName, fnTy, globOD);
     emptyFn.setLinkage(cir::GlobalLinkageKind::LinkOnceODRLinkage);
-    emptyFn.setComdat(true);
+    emptyFn.setSelfComdat();
 
     // Body of __empty_global_delete: trap and unreachable.
     mlir::Block *entryBlock = emptyFn.addEntryBlock();
@@ -4828,7 +4834,7 @@ void CIRGenModule::emitGlobalDeleteForwardingBodies() {
     // Upgrade the weak alias into a strong forwarding body with linkonce_odr and comdat.
     alias->removeAttr("aliasee");
     alias.setLinkage(cir::GlobalLinkageKind::LinkOnceODRLinkage);
-    alias.setComdat(true);
+    alias.setSelfComdat();
 
     mlir::Location loc = operatorDeleteFD->getLocation().isValid()
                              ? getLoc(operatorDeleteFD->getLocation())
