@@ -850,6 +850,10 @@ public:
   // or if they are alias to each other.
   cir::FuncOp codegenCXXStructor(clang::GlobalDecl gd);
 
+  /// Try to emit the base destructor as an alias to another base destructor.
+  /// Returns true if the destructor must be emitted separately.
+  bool tryEmitBaseDestructorAsAlias(const CXXDestructorDecl *d);
+
   bool lookupRepresentativeDecl(llvm::StringRef mangledName,
                                 clang::GlobalDecl &gd) const;
 

@@ -4345,6 +4345,104 @@ void CIRGenModule::emitAliasForGlobal(StringRef mangledName,
   setCommonAttributes(aliasGD, alias);
 }
 
+bool CIRGenModule::tryEmitBaseDestructorAsAlias(const CXXDestructorDecl *d) {
+  if (!getCodeGenOpts().CXXCtorDtorAliases)
+    return true;
+
+  if (getCodeGenOpts().OptimizationLevel == 0)
+    return true;
+
+  if (getTarget().getTriple().isWindowsArm64EC())
+    return true;
+
+  if (getCodeGenOpts().SanitizeMemoryUseAfterDtor &&
+      !d->getParent()->field_empty())
+    return true;
+
+  if (!d->hasTrivialBody())
+    return true;
+
+  const CXXRecordDecl *classDecl = d->getParent();
+
+  if (classDecl->mayInsertExtraPadding())
+    return true;
+
+  if (classDecl->getNumVBases())
+    return true;
+
+  for (const auto *f : classDecl->fields())
+    if (f->getType().isDestructedType())
+      return true;
+
+  const CXXRecordDecl *uniqueBase = nullptr;
+  for (const auto &b : classDecl->bases()) {
+    if (b.isVirtual())
+      continue;
+
+    const auto *base = b.getType()->castAsCXXRecordDecl();
+    if (base->hasTrivialDestructor())
+      continue;
+
+    if (uniqueBase)
+      return true;
+    uniqueBase = base;
+  }
+
+  if (!uniqueBase)
+    return true;
+
+  const ASTRecordLayout &classLayout = astContext.getASTRecordLayout(classDecl);
+  if (!classLayout.getBaseClassOffset(uniqueBase).isZero())
+    return true;
+
+  const CXXDestructorDecl *baseD = uniqueBase->getDestructor();
+  if (baseD->getType()->castAs<FunctionType>()->getCallConv() !=
+      d->getType()->castAs<FunctionType>()->getCallConv())
+    return true;
+
+  GlobalDecl aliasDecl(d, Dtor_Base);
+  GlobalDecl targetDecl(baseD, Dtor_Base);
+
+  cir::GlobalLinkageKind linkage = getFunctionLinkage(aliasDecl);
+
+  if (!cir::isValidLinkage(linkage))
+    return true;
+
+  cir::GlobalLinkageKind targetLinkage = getFunctionLinkage(targetDecl);
+
+  StringRef mangledName = getMangledName(aliasDecl);
+  auto *entry = getGlobalValue(mangledName);
+  auto globalValue = dyn_cast_or_null<cir::CIRGlobalValueInterface>(entry);
+  if (globalValue && !globalValue.isDeclaration())
+    return false;
+  if (replacements.count(mangledName))
+    return false;
+
+  auto aliasee = dyn_cast_or_null<cir::FuncOp>(getAddrOfGlobal(targetDecl));
+  if (!aliasee)
+    return true;
+
+  if (cir::isDiscardableIfUnused(linkage) &&
+      !(targetLinkage == cir::GlobalLinkageKind::AvailableExternallyLinkage &&
+        targetDecl.getDecl()->hasAttr<AlwaysInlineAttr>())) {
+    addReplacement(mangledName, aliasee);
+    return false;
+  }
+
+  if (cir::isWeakForLinker(linkage) && getTriple().isOSBinFormatCOFF()) {
+    return true;
+  }
+
+  if (aliasee.isDeclaration())
+    return true;
+
+  if (cir::isWeakForLinker(targetLinkage))
+    return true;
+
+  emitAliasForGlobal(mangledName, entry, aliasDecl, aliasee, linkage);
+  return false;
+}
+
 mlir::Type CIRGenModule::convertType(QualType type) {
   return genTypes.convertType(type);
 }

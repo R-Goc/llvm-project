@@ -1054,6 +1054,15 @@ cir::FuncOp CIRGenVTables::maybeEmitThunk(GlobalDecl gd,
   if (shouldCloneVarArgs) {
     if (useAvailableExternallyLinkage)
       return thunkFn;
+    if (!md->isDefined()) {
+      cgm.errorUnsupported(md, "return-adjusting thunk with variadic arguments");
+      mlir::OpBuilder::InsertionGuard guard(cgm.getBuilder());
+      mlir::Block *entryBb = thunkFn.addEntryBlock();
+      cgm.getBuilder().setInsertionPointToStart(entryBb);
+      cir::UnreachableOp::create(cgm.getBuilder(), thunkFn.getLoc());
+      setThunkProperties(cgm, thunkAdjustments, thunkFn, forVTable, gd);
+      return thunkFn;
+    }
     cgm.errorNYI("varargs thunk cloning");
   } else {
     // Normal thunk body generation.

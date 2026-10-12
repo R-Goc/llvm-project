@@ -672,6 +672,9 @@ void CIRGenMicrosoftCXXABI::emitCXXStructor(GlobalDecl gd) {
       dtor->getParent()->getNumVBases() == 0)
     gd = gd.getWithDtorType(Dtor_Base);
 
+  if (gd.getDtorType() == Dtor_Base && !cgm.tryEmitBaseDestructorAsAlias(dtor))
+    return;
+
   if (gd.getDtorType() == Dtor_VectorDeleting) {
     if (!cgm.classNeedsVectorDestructor(dtor->getParent())) {
       GlobalDecl scalarDtorGD(dtor, Dtor_Deleting);
