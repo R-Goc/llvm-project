@@ -1117,6 +1117,117 @@ static void eraseCatchCopyThunks(mlir::ModuleOp mod) {
   }
 }
 
+//===----------------------------------------------------------------------===//
+// Microsoft EH ABI Lowering
+//===----------------------------------------------------------------------===//
+
+class MicrosoftEHLowering : public EHABILowering {
+public:
+  using EHABILowering::EHABILowering;
+  mlir::LogicalResult run() override;
+
+private:
+  cir::FuncOp cxxThrowFunc;
+  void ensureCxxThrowDecl(mlir::Location loc);
+  mlir::LogicalResult lowerTryThrow(cir::TryThrowOp op);
+};
+
+void MicrosoftEHLowering::ensureCxxThrowDecl(mlir::Location loc) {
+  if (cxxThrowFunc)
+    return;
+  auto voidType = cir::VoidType::get(ctx);
+  auto voidPtrType = cir::PointerType::get(voidType);
+  auto fnTy = cir::FuncType::get({voidPtrType, voidPtrType}, voidType);
+  cxxThrowFunc =
+      getOrCreateRuntimeFuncDecl(mod, loc, "_CxxThrowException", fnTy);
+  auto tripleAttr = mlir::dyn_cast_if_present<mlir::StringAttr>(
+      mod->getAttr(cir::CIRDialect::getTripleAttrName()));
+  if (tripleAttr) {
+    llvm::Triple triple(tripleAttr.getValue());
+    if (triple.getArch() == llvm::Triple::x86)
+      cxxThrowFunc.setCallingConv(cir::CallingConv::X86_StdCall);
+  }
+}
+
+mlir::LogicalResult MicrosoftEHLowering::lowerTryThrow(cir::TryThrowOp op) {
+  mlir::Location loc = op.getLoc();
+  mlir::Block *normalDest = op.getNormalDest();
+  mlir::Block *unwindDest = op.getUnwindDest();
+  builder.setInsertionPoint(op);
+
+  ensureCxxThrowDecl(loc);
+
+  auto voidType = cir::VoidType::get(ctx);
+  auto voidPtrType = cir::PointerType::get(voidType);
+
+  mlir::Value pException;
+  mlir::Value pThrowInfo;
+
+  if (op.rethrows()) {
+    pException = cir::ConstantOp::create(
+        builder, loc,
+        cir::ConstPtrAttr::get(voidPtrType, builder.getI64IntegerAttr(0)));
+    pThrowInfo = cir::ConstantOp::create(
+        builder, loc,
+        cir::ConstPtrAttr::get(voidPtrType, builder.getI64IntegerAttr(0)));
+  } else {
+    pException = op.getExceptionPtr();
+    if (pException.getType() != voidPtrType)
+      pException = cir::CastOp::create(builder, loc, voidPtrType,
+                                       cir::CastKind::bitcast, pException);
+
+    mlir::FlatSymbolRefAttr typeInfoAttr = op.getTypeInfoAttr();
+    if (!typeInfoAttr)
+      return op.emitError("throw missing type info attribute");
+
+    if (auto typeInfoGlobal = mod.lookupSymbol<cir::GlobalOp>(typeInfoAttr)) {
+      auto typeInfoPtrTy = cir::PointerType::get(typeInfoGlobal.getSymType());
+      pThrowInfo = cir::GetGlobalOp::create(builder, loc, typeInfoPtrTy,
+                                            typeInfoAttr.getValue());
+    } else {
+      pThrowInfo = cir::GetGlobalOp::create(builder, loc, voidPtrType,
+                                            typeInfoAttr.getValue());
+    }
+    if (pThrowInfo.getType() != voidPtrType)
+      pThrowInfo = cir::CastOp::create(builder, loc, voidPtrType,
+                                       cir::CastKind::bitcast, pThrowInfo);
+  }
+
+  auto tryCall = cir::TryCallOp::create(
+      builder, loc, mlir::FlatSymbolRefAttr::get(cxxThrowFunc), voidType,
+      normalDest, unwindDest, mlir::ValueRange{pException, pThrowInfo});
+  if (cxxThrowFunc.getCallingConv() == cir::CallingConv::X86_StdCall)
+    tryCall.setCallingConv(cir::CallingConv::X86_StdCall);
+
+  op.erase();
+  return mlir::success();
+}
+
+mlir::LogicalResult MicrosoftEHLowering::run() {
+  bool hasInitiate = false;
+  SmallVector<cir::TryThrowOp> tryThrowOps;
+
+  for (cir::FuncOp funcOp : mod.getOps<cir::FuncOp>()) {
+    funcOp.walk([&](mlir::Operation *op) {
+      if (auto tryThrow = dyn_cast<cir::TryThrowOp>(op))
+        tryThrowOps.push_back(tryThrow);
+      else if (isa<cir::EhInitiateOp>(op))
+        hasInitiate = true;
+    });
+  }
+
+  for (cir::TryThrowOp op : tryThrowOps) {
+    if (mlir::failed(lowerTryThrow(op)))
+      return mlir::failure();
+  }
+
+  if (hasInitiate)
+    return mod.emitError(
+        "Microsoft ABI funclet lowering is not yet implemented");
+
+  return mlir::success();
+}
+
 void CIREHABILoweringPass::runOnOperation() {
   auto mod = mlir::cast<mlir::ModuleOp>(getOperation());
 
@@ -1132,13 +1243,10 @@ void CIREHABILoweringPass::runOnOperation() {
 
   // Select the ABI-specific lowering handler from the triple. The Microsoft
   // C++ ABI targets a Windows MSVC environment; everything else uses Itanium.
-  // Extend this when Microsoft ABI lowering is added.
   llvm::Triple triple(tripleAttr.getValue());
   std::unique_ptr<EHABILowering> lowering;
   if (triple.isWindowsMSVCEnvironment()) {
-    mod.emitError(
-        "EH ABI lowering is not yet implemented for the Microsoft ABI");
-    return signalPassFailure();
+    lowering = std::make_unique<MicrosoftEHLowering>(mod);
   } else {
     lowering = std::make_unique<ItaniumEHLowering>(mod);
   }

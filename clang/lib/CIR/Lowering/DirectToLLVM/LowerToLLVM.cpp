@@ -1030,6 +1030,18 @@ CIRAttrToValue::getAddressOfSymbol(mlir::FlatSymbolRefAttr symbol) {
   unsigned addrSpace = 0;
   llvm::StringRef symName;
   mlir::Operation *sourceSymbol = symbolTables.lookupSymbolIn(moduleOp, symbol);
+  if (!sourceSymbol && symbol.getValue() == "__ImageBase") {
+    mlir::OpBuilder::InsertionGuard guard(rewriter);
+    rewriter.setInsertionPointToStart(moduleOp.getBody());
+    auto i8Ty = mlir::IntegerType::get(rewriter.getContext(), 8);
+    auto imageBaseGlobal = mlir::LLVM::GlobalOp::create(
+        rewriter, parentOp->getLoc(), i8Ty, /*isConstant=*/true,
+        mlir::LLVM::Linkage::External, "__ImageBase", mlir::Attribute(),
+        /*alignment=*/0, addrSpace);
+    imageBaseGlobal.setDsoLocal(true);
+    symbolTables.getSymbolTable(moduleOp).insert(imageBaseGlobal);
+    sourceSymbol = imageBaseGlobal;
+  }
   if (auto llvmSymbol = dyn_cast<mlir::LLVM::GlobalOp>(sourceSymbol)) {
     sourceType = llvmSymbol.getType();
     symName = llvmSymbol.getSymName();
@@ -1174,6 +1186,32 @@ mlir::Value CIRAttrToValue::visitCirAttr(cir::GlobalOffsetAttr globalAttr) {
 
   return castGlobalAddrToType(addrOp, globalAttr.getType(), lowered.sourceType,
                               lowered.addrSpace);
+}
+
+mlir::Value CIRAttrToValue::visitCirAttr(cir::ImageRelativeAttr imageRelAttr) {
+  mlir::Location loc = parentOp->getLoc();
+  mlir::DataLayout layout(parentOp->getParentOfType<mlir::ModuleOp>());
+  mlir::MLIRContext *ctx = rewriter.getContext();
+  auto ptrTy = mlir::LLVM::LLVMPointerType::get(ctx);
+  mlir::Type intptrTy =
+      rewriter.getIntegerType(layout.getTypeSizeInBits(ptrTy));
+
+  mlir::Value symbolAddr = getAddressOfSymbol(imageRelAttr.getSymbol()).addr;
+  auto imageBaseSym = mlir::FlatSymbolRefAttr::get(ctx, "__ImageBase");
+  mlir::Value imageBaseAddr = getAddressOfSymbol(imageBaseSym).addr;
+
+  mlir::Value symbolInt =
+      mlir::LLVM::PtrToIntOp::create(rewriter, loc, intptrTy, symbolAddr);
+  mlir::Value imageBaseInt =
+      mlir::LLVM::PtrToIntOp::create(rewriter, loc, intptrTy, imageBaseAddr);
+  mlir::Value diff =
+      mlir::LLVM::SubOp::create(rewriter, loc, symbolInt, imageBaseInt);
+
+  mlir::Type resultTy = converter->convertType(imageRelAttr.getType());
+  mlir::Value result = diff;
+  if (resultTy != intptrTy)
+    result = mlir::LLVM::TruncOp::create(rewriter, loc, resultTy, diff);
+  return result;
 }
 
 // TypeInfoAttr visitor.
@@ -4905,11 +4943,11 @@ mlir::LogicalResult CIRToLLVMInsertMemberOpLowering::matchAndRewrite(
   return mlir::success();
 }
 
-void createLLVMFuncOpIfNotExist(mlir::ConversionPatternRewriter &rewriter,
-                                mlir::SymbolTableCollection &symbolTables,
-                                mlir::Operation *srcOp, llvm::StringRef fnName,
-                                mlir::Type fnTy, mlir::ArrayAttr argAttrs,
-                                mlir::ArrayAttr resAttrs) {
+void createLLVMFuncOpIfNotExist(
+    mlir::ConversionPatternRewriter &rewriter,
+    mlir::SymbolTableCollection &symbolTables, mlir::Operation *srcOp,
+    llvm::StringRef fnName, mlir::Type fnTy, mlir::ArrayAttr argAttrs,
+    mlir::ArrayAttr resAttrs mlir::LLVM::cconv::CConv *cconv) {
   mlir::ModuleOp modOp = srcOp->getParentOfType<mlir::ModuleOp>();
   mlir::Operation *sourceSymbol = symbolTables.lookupSymbolIn(
       modOp, mlir::StringAttr::get(fnTy.getContext(), fnName));
@@ -4923,8 +4961,17 @@ void createLLVMFuncOpIfNotExist(mlir::ConversionPatternRewriter &rewriter,
       fn.setArgAttrsAttr(argAttrs);
     if (resAttrs)
       fn.setResAttrsAttr(resAttrs);
+    if (cconv)
+      fn.setCConv(*cconv);
     // Update the symbol table.
     symbolTables.getSymbolTable(fn->getParentOp()).insert(fn);
+  } else if (cconv) {
+    if (auto llvmFn = dyn_cast<mlir::LLVM::LLVMFuncOp>(sourceSymbol))
+      llvmFn.setCConv(*cconv);
+    else if (auto cirFn = dyn_cast<cir::FuncOp>(sourceSymbol)) {
+      if (*cconv == mlir::LLVM::cconv::CConv::X86_StdCall)
+        cirFn.setCallingConv(cir::CallingConv::X86_StdCall);
+    }
   }
 }
 
@@ -4933,6 +4980,51 @@ mlir::LogicalResult CIRToLLVMThrowOpLowering::matchAndRewrite(
     mlir::ConversionPatternRewriter &rewriter) const {
   mlir::Location loc = op.getLoc();
   auto voidTy = mlir::LLVM::LLVMVoidType::get(getContext());
+  auto llvmPtrTy = mlir::LLVM::LLVMPointerType::get(rewriter.getContext());
+
+  mlir::ModuleOp moduleOp = op->getParentOfType<mlir::ModuleOp>();
+  llvm::Triple triple;
+  if (auto tripleAttr = mlir::dyn_cast_or_null<mlir::StringAttr>(
+          moduleOp->getAttr(cir::CIRDialect::getTripleAttrName()))) {
+    triple = llvm::Triple(tripleAttr.getValue());
+  } else if (auto tripleAttr =
+                 mlir::dyn_cast_or_null<mlir::StringAttr>(moduleOp->getAttr(
+                     mlir::LLVM::LLVMDialect::getTargetTripleAttrName()))) {
+    triple = llvm::Triple(tripleAttr.getValue());
+  }
+
+  if (triple.isWindowsMSVCEnvironment()) {
+    const llvm::StringRef fnName = "_CxxThrowException";
+    auto fnTy =
+        mlir::LLVM::LLVMFunctionType::get(voidTy, {llvmPtrTy, llvmPtrTy});
+    std::optional<mlir::LLVM::cconv::CConv> cconv;
+    if (triple.getArch() == llvm::Triple::x86)
+      cconv = mlir::LLVM::cconv::CConv::X86_StdCall;
+
+    createLLVMFuncOpIfNotExist(rewriter, symbolTables, op, fnName, fnTy,
+                               /*argAttrs=*/nullptr, /*resAttrs=*/nullptr,
+                               cconv ? &*cconv : nullptr);
+
+    mlir::Value pException;
+    mlir::Value pThrowInfo;
+    if (op.rethrows()) {
+      pException = mlir::LLVM::ZeroOp::create(rewriter, loc, llvmPtrTy);
+      pThrowInfo = mlir::LLVM::ZeroOp::create(rewriter, loc, llvmPtrTy);
+    } else {
+      pException = adaptor.getExceptionPtr();
+      pThrowInfo = mlir::LLVM::AddressOfOp::create(rewriter, loc, llvmPtrTy,
+                                                   adaptor.getTypeInfoAttr());
+    }
+
+    auto callOp =
+        mlir::LLVM::CallOp::create(rewriter, loc, mlir::TypeRange{}, fnName,
+                                   mlir::ValueRange{pException, pThrowInfo});
+    if (cconv)
+      callOp.setCConv(*cconv);
+
+    rewriter.replaceOp(op, callOp);
+    return mlir::success();
+  }
 
   // TODO(cir): set the runtime calling convention on the runtime calls below.
   assert(!cir::MissingFeatures::opFuncCallingConv());
@@ -4952,7 +5044,6 @@ mlir::LogicalResult CIRToLLVMThrowOpLowering::matchAndRewrite(
     return mlir::success();
   }
 
-  auto llvmPtrTy = mlir::LLVM::LLVMPointerType::get(rewriter.getContext());
   auto fnTy = mlir::LLVM::LLVMFunctionType::get(
       voidTy, {llvmPtrTy, llvmPtrTy, llvmPtrTy});
 
@@ -4961,8 +5052,7 @@ mlir::LogicalResult CIRToLLVMThrowOpLowering::matchAndRewrite(
   createLLVMFuncOpIfNotExist(rewriter, symbolTables, op, fnName, fnTy);
 
   mlir::Value typeInfo = mlir::LLVM::AddressOfOp::create(
-      rewriter, loc, mlir::LLVM::LLVMPointerType::get(rewriter.getContext()),
-      adaptor.getTypeInfoAttr());
+      rewriter, loc, llvmPtrTy, adaptor.getTypeInfoAttr());
 
   mlir::Value dtor;
   if (op.getDtor()) {

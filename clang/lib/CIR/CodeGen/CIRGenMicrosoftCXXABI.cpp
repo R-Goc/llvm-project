@@ -28,8 +28,11 @@
 #include "clang/Basic/TargetInfo.h"
 #include "clang/CIR/MissingFeatures.h"
 #include "llvm/ADT/DenseMap.h"
+#include "llvm/ADT/SetVector.h"
+#include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/SmallString.h"
 #include "llvm/Support/ErrorHandling.h"
+#include "llvm/Support/SaveAndRestore.h"
 #include "llvm/Support/raw_ostream.h"
 
 using namespace clang;
@@ -64,6 +67,138 @@ QualType decomposeTypeForEH(ASTContext &context, QualType t, bool &isConst,
   return t;
 }
 
+struct MSRTTIClass {
+  enum {
+    IsPrivateOnPath = 1 | 8,
+    IsAmbiguous = 2,
+    IsPrivate = 4,
+    IsVirtual = 16,
+    HasHierarchyDescriptor = 64
+  };
+  MSRTTIClass(const CXXRecordDecl *RD) : RD(RD) {}
+  uint32_t initialize(const MSRTTIClass *Parent,
+                      const CXXBaseSpecifier *Specifier);
+
+  MSRTTIClass *getFirstChild() { return this + 1; }
+  static MSRTTIClass *getNextChild(MSRTTIClass *Child) {
+    return Child + 1 + Child->NumBases;
+  }
+
+  const CXXRecordDecl *RD, *VirtualRoot;
+  uint32_t Flags, NumBases, OffsetInVBase;
+};
+
+uint32_t MSRTTIClass::initialize(const MSRTTIClass *Parent,
+                                 const CXXBaseSpecifier *Specifier) {
+  Flags = HasHierarchyDescriptor;
+  if (!Parent) {
+    VirtualRoot = nullptr;
+    OffsetInVBase = 0;
+  } else {
+    if (Specifier->getAccessSpecifier() != AS_public)
+      Flags |= IsPrivate | IsPrivateOnPath;
+    if (Specifier->isVirtual()) {
+      Flags |= IsVirtual;
+      VirtualRoot = RD;
+      OffsetInVBase = 0;
+    } else {
+      if (Parent->Flags & IsPrivateOnPath)
+        Flags |= IsPrivateOnPath;
+      VirtualRoot = Parent->VirtualRoot;
+      OffsetInVBase =
+          Parent->OffsetInVBase + RD->getASTContext()
+                                      .getASTRecordLayout(Parent->RD)
+                                      .getBaseClassOffset(RD)
+                                      .getQuantity();
+    }
+  }
+  NumBases = 0;
+  MSRTTIClass *Child = getFirstChild();
+  for (const CXXBaseSpecifier &Base : RD->bases()) {
+    NumBases += Child->initialize(this, &Base) + 1;
+    Child = getNextChild(Child);
+  }
+  return NumBases;
+}
+
+static void serializeClassHierarchy(SmallVectorImpl<MSRTTIClass> &Classes,
+                                    const CXXRecordDecl *RD) {
+  Classes.push_back(MSRTTIClass(RD));
+  for (const CXXBaseSpecifier &Base : RD->bases())
+    serializeClassHierarchy(Classes, Base.getType()->getAsCXXRecordDecl());
+}
+
+static void detectAmbiguousBases(SmallVectorImpl<MSRTTIClass> &Classes) {
+  llvm::SmallPtrSet<const CXXRecordDecl *, 8> VirtualBases;
+  llvm::SmallPtrSet<const CXXRecordDecl *, 8> UniqueBases;
+  llvm::SmallPtrSet<const CXXRecordDecl *, 8> AmbiguousBases;
+  for (MSRTTIClass *Class = &Classes.front(); Class <= &Classes.back();) {
+    if ((Class->Flags & MSRTTIClass::IsVirtual) &&
+        !VirtualBases.insert(Class->RD).second) {
+      Class = MSRTTIClass::getNextChild(Class);
+      continue;
+    }
+    if (!UniqueBases.insert(Class->RD).second)
+      AmbiguousBases.insert(Class->RD);
+    Class++;
+  }
+  if (AmbiguousBases.empty())
+    return;
+  for (MSRTTIClass &Class : Classes)
+    if (AmbiguousBases.count(Class.RD))
+      Class.Flags |= MSRTTIClass::IsAmbiguous;
+}
+
+static bool hasDefaultCXXMethodCC(ASTContext &Context,
+                                  const CXXMethodDecl *MD) {
+  CallingConv ExpectedCallingConv = Context.getDefaultCallingConvention(
+      /*IsVariadic=*/false, /*IsCXXMethod=*/true);
+  CallingConv ActualCallingConv =
+      MD->getType()->castAs<FunctionProtoType>()->getCallConv();
+  return ExpectedCallingConv == ActualCallingConv;
+}
+
+static cir::GlobalLinkageKind getLinkageForRTTI(QualType Ty) {
+  switch (Ty->getLinkage()) {
+  case Linkage::Invalid:
+    llvm_unreachable("Linkage hasn't been computed!");
+
+  case Linkage::None:
+  case Linkage::Internal:
+  case Linkage::UniqueExternal:
+    return cir::GlobalLinkageKind::InternalLinkage;
+
+  case Linkage::VisibleNone:
+  case Linkage::Module:
+  case Linkage::External:
+    return cir::GlobalLinkageKind::LinkOnceODRLinkage;
+  }
+  llvm_unreachable("Invalid linkage!");
+}
+
+static void insertThrowAndSplit(mlir::OpBuilder &builder, mlir::Location loc,
+                                mlir::Value exceptionPtr = {},
+                                mlir::FlatSymbolRefAttr typeInfo = {},
+                                mlir::FlatSymbolRefAttr dtor = {}) {
+  mlir::Block *currentBlock = builder.getInsertionBlock();
+  mlir::Region *region = currentBlock->getParent();
+
+  if (currentBlock->empty()) {
+    cir::ThrowOp::create(builder, loc, exceptionPtr, typeInfo, dtor);
+    cir::UnreachableOp::create(builder, loc);
+  } else {
+    mlir::Block *throwBlock = builder.createBlock(region);
+
+    cir::ThrowOp::create(builder, loc, exceptionPtr, typeInfo, dtor);
+    cir::UnreachableOp::create(builder, loc);
+
+    builder.setInsertionPointToEnd(currentBlock);
+    cir::BrOp::create(builder, loc, throwBlock);
+  }
+
+  (void)builder.createBlock(region);
+}
+
 class CIRGenMicrosoftCXXABI : public CIRGenCXXABI {
   using VFTableIdTy = std::pair<const CXXRecordDecl *, CharUnits>;
   llvm::DenseMap<VFTableIdTy, cir::GlobalOp> vftablesMap;
@@ -75,6 +210,10 @@ class CIRGenMicrosoftCXXABI : public CIRGenCXXABI {
   };
   llvm::DenseMap<const CXXRecordDecl *, VBTableGlobals> vbTablesMap;
   llvm::DenseMap<const DeclContext *, unsigned> threadSafeGuardNumMap;
+  cir::RecordType catchableTypeType;
+  cir::RecordType throwInfoType;
+  llvm::DenseMap<QualType, cir::GlobalOp> throwInfos;
+  llvm::DenseMap<QualType, cir::GlobalOp> catchableTypeArrays;
 
   const VBTableGlobals &enumerateVBTables(const CXXRecordDecl *rd);
   cir::GlobalOp getAddrOfVBTable(const VPtrInfo &vbt, const CXXRecordDecl *rd,
@@ -349,6 +488,28 @@ public:
   CatchTypeInfo
   getAddrOfCXXCatchHandlerType(mlir::Location loc, QualType ty,
                                QualType catchHandlerType) override;
+
+  bool isImageRelative() const {
+    return cgm.getASTContext().getTargetInfo().getPointerWidth(LangAS::Default) ==
+           64;
+  }
+  cir::GlobalOp getImageBase(mlir::Location loc);
+  mlir::Type getImageRelativeType(mlir::Type ptrTy);
+  mlir::Attribute getImageRelativeAttr(mlir::Attribute ptrAttr,
+                                       mlir::Location loc);
+
+  cir::RecordType getCatchableTypeType();
+  cir::RecordType getCatchableTypeArrayType(uint32_t numEntries);
+  cir::RecordType getThrowInfoType();
+
+  mlir::Attribute getCatchableType(mlir::Location loc, QualType T,
+                                  uint32_t NVOffset = 0,
+                                  int32_t VBPtrOffset = -1,
+                                  uint32_t VBIndex = 0);
+  cir::GlobalOp getCatchableTypeArray(mlir::Location loc, QualType T);
+  cir::GlobalOp getThrowInfo(mlir::Location loc, QualType throwType) override;
+  cir::FuncOp getAddrOfCXXCtorClosure(const CXXConstructorDecl *CD,
+                                      CXXCtorType CT);
 
   void emitRethrow(CIRGenFunction &cgf, bool isNoReturn) override;
   void emitThrow(CIRGenFunction &cgf, const CXXThrowExpr *e) override;
@@ -651,6 +812,12 @@ CIRGenMicrosoftCXXABI::getImplicitConstructorArgs(CIRGenFunction &cgf,
 
 void CIRGenMicrosoftCXXABI::emitCXXConstructors(const CXXConstructorDecl *d) {
   cgm.emitGlobal(GlobalDecl(d, Ctor_Complete));
+
+  if (d->hasAttr<DLLExportAttr>() && d->isDefaultConstructor()) {
+    if (!hasDefaultCXXMethodCC(cgm.getASTContext(), d) || d->getNumParams() != 0) {
+      getAddrOfCXXCtorClosure(d, Ctor_DefaultClosure);
+    }
+  }
 }
 
 void CIRGenMicrosoftCXXABI::emitCXXDestructors(const CXXDestructorDecl *d) {
@@ -1783,14 +1950,509 @@ CatchTypeInfo CIRGenMicrosoftCXXABI::getAddrOfCXXCatchHandlerType(
   return CatchTypeInfo{rtti, flags};
 }
 
+cir::GlobalOp CIRGenMicrosoftCXXABI::getImageBase(mlir::Location loc) {
+  if (auto gv = cgm.getGlobalValue("__ImageBase"))
+    return cast<cir::GlobalOp>(gv);
+  CIRGenBuilderTy &builder = cgm.getBuilder();
+  cir::GlobalOp gv = cgm.createGlobalOp(loc, "__ImageBase",
+                                        builder.getUInt8Ty(),
+                                        /*isConstant=*/true);
+  gv.setLinkage(cir::GlobalLinkageKind::ExternalLinkage);
+  return gv;
+}
+
+mlir::Type CIRGenMicrosoftCXXABI::getImageRelativeType(mlir::Type ptrTy) {
+  if (!isImageRelative())
+    return ptrTy;
+  return cgm.getBuilder().getSInt32Ty();
+}
+
+mlir::Attribute
+CIRGenMicrosoftCXXABI::getImageRelativeAttr(mlir::Attribute ptrAttr,
+                                            mlir::Location loc) {
+  CIRGenBuilderTy &builder = cgm.getBuilder();
+  cir::PointerType voidPtrTy = builder.getVoidPtrTy();
+
+  bool isNull = !ptrAttr;
+  if (!isNull) {
+    if (auto constPtr = mlir::dyn_cast<cir::ConstPtrAttr>(ptrAttr))
+      if (constPtr.isNullValue())
+        isNull = true;
+  }
+
+  if (!isImageRelative()) {
+    if (isNull)
+      return builder.getConstNullPtrAttr(voidPtrTy);
+    if (auto sym = mlir::dyn_cast<mlir::FlatSymbolRefAttr>(ptrAttr))
+      return cir::GlobalViewAttr::get(voidPtrTy, sym);
+    return ptrAttr;
+  }
+
+  cir::IntType s32Ty = builder.getSInt32Ty();
+  if (isNull)
+    return cir::IntAttr::get(s32Ty, 0);
+
+  getImageBase(loc);
+
+  mlir::FlatSymbolRefAttr sym;
+  if (auto gvAttr = mlir::dyn_cast<cir::GlobalViewAttr>(ptrAttr)) {
+    sym = gvAttr.getSymbol();
+  } else if (auto symAttr = mlir::dyn_cast<mlir::FlatSymbolRefAttr>(ptrAttr)) {
+    sym = symAttr;
+  } else {
+    llvm_unreachable("unexpected attribute for image-relative reference");
+  }
+
+  return cir::ImageRelativeAttr::get(s32Ty, sym);
+}
+
+cir::RecordType CIRGenMicrosoftCXXABI::getCatchableTypeType() {
+  if (catchableTypeType)
+    return catchableTypeType;
+  CIRGenBuilderTy &builder = cgm.getBuilder();
+  cir::IntType s32Ty = builder.getSInt32Ty();
+  mlir::Type imgRelVoidPtrTy = getImageRelativeType(builder.getVoidPtrTy());
+  mlir::Type fieldTypes[] = {
+      s32Ty,           // Flags
+      imgRelVoidPtrTy, // TypeDescriptor
+      s32Ty,           // NonVirtualAdjustment
+      s32Ty,           // OffsetToVBPtr
+      s32Ty,           // VBTableIndex
+      s32Ty,           // Size
+      imgRelVoidPtrTy  // CopyCtor
+  };
+  catchableTypeType = builder.getCompleteNamedRecordType(
+      fieldTypes, /*packed=*/false, "eh.CatchableType",
+      cir::RecordType::getAllDataKinds(fieldTypes));
+  return catchableTypeType;
+}
+
+cir::RecordType
+CIRGenMicrosoftCXXABI::getCatchableTypeArrayType(uint32_t numEntries) {
+  CIRGenBuilderTy &builder = cgm.getBuilder();
+  cir::IntType s32Ty = builder.getSInt32Ty();
+  mlir::Type ctType = getImageRelativeType(builder.getVoidPtrTy());
+  cir::ArrayType at = cir::ArrayType::get(ctType, numEntries);
+  mlir::Type fieldTypes[] = {
+      s32Ty, // NumEntries
+      at     // CatchableTypes
+  };
+  std::string name = ("eh.CatchableTypeArray." + Twine(numEntries)).str();
+  return builder.getCompleteNamedRecordType(
+      fieldTypes, /*packed=*/false, name,
+      cir::RecordType::getAllDataKinds(fieldTypes));
+}
+
+cir::RecordType CIRGenMicrosoftCXXABI::getThrowInfoType() {
+  if (throwInfoType)
+    return throwInfoType;
+  CIRGenBuilderTy &builder = cgm.getBuilder();
+  cir::IntType s32Ty = builder.getSInt32Ty();
+  mlir::Type imgRelVoidPtrTy = getImageRelativeType(builder.getVoidPtrTy());
+  mlir::Type fieldTypes[] = {
+      s32Ty,           // Flags
+      imgRelVoidPtrTy, // CleanupFn
+      imgRelVoidPtrTy, // ForwardCompat
+      imgRelVoidPtrTy  // CatchableTypeArray
+  };
+  throwInfoType = builder.getCompleteNamedRecordType(
+      fieldTypes, /*packed=*/false, "eh.ThrowInfo",
+      cir::RecordType::getAllDataKinds(fieldTypes));
+  return throwInfoType;
+}
+
+cir::FuncOp
+CIRGenMicrosoftCXXABI::getAddrOfCXXCtorClosure(const CXXConstructorDecl *cd,
+                                              CXXCtorType ct) {
+  assert(ct == Ctor_CopyingClosure || ct == Ctor_DefaultClosure);
+
+  SmallString<256> thunkName;
+  {
+    llvm::raw_svector_ostream out(thunkName);
+    getMangleContext().mangleName(GlobalDecl(cd, ct), out);
+  }
+
+  if (auto gv = cgm.getGlobalValue(thunkName))
+    return cast<cir::FuncOp>(gv);
+
+  const CIRGenFunctionInfo &fnInfo = cgm.getTypes().arrangeMSCtorClosure(cd, ct);
+  cir::FuncType thunkTy = cgm.getTypes().getFunctionType(fnInfo);
+  const CXXRecordDecl *rd = cd->getParent();
+  CanQualType recordTy = cgm.getASTContext().getCanonicalTagType(rd);
+  cir::GlobalLinkageKind linkage = getLinkageForRTTI(recordTy);
+
+  mlir::Location loc = cgm.getLoc(cd->getLocation());
+  cir::FuncOp thunkFn =
+      cgm.createCIRFunction(loc, thunkName, thunkTy, nullptr);
+  thunkFn.setCallingConv(fnInfo.getCallingConvention());
+  thunkFn.setLinkage(linkage);
+  if (cgm.supportsCOMDAT() && cir::isWeakForLinker(linkage))
+    thunkFn.setSelfComdat();
+
+  bool isCopy = ct == Ctor_CopyingClosure;
+
+  CIRGenBuilderTy builder(cgm.getMLIRContext(), cgm);
+  CIRGenFunction cgf(cgm, builder);
+  cgf.curGD = GlobalDecl(cd, Ctor_Complete);
+  cgf.curFuncIsThunk = true;
+
+  FunctionArgList functionArgs;
+  buildThisParam(cgf, functionArgs);
+
+  auto *srcParam = ImplicitParamDecl::Create(
+      cgm.getASTContext(), /*DC=*/nullptr, SourceLocation(),
+      &cgm.getASTContext().Idents.get("src"),
+      cgm.getASTContext().getLValueReferenceType(recordTy,
+                                                 /*SpelledAsLValue=*/true),
+      ImplicitParamKind::Other);
+  if (isCopy)
+    functionArgs.push_back(srcParam);
+
+  auto *isMostDerived =
+      ImplicitParamDecl::Create(cgm.getASTContext(), /*DC=*/nullptr,
+                                SourceLocation(),
+                                &cgm.getASTContext().Idents.get("is_most_derived"),
+                                cgm.getASTContext().IntTy,
+                                ImplicitParamKind::Other);
+  if (rd->getNumVBases() > 0)
+    functionArgs.push_back(isMostDerived);
+
+  mlir::Block *entryBb = thunkFn.addEntryBlock();
+  builder.setInsertionPointToStart(entryBb);
+
+  CIRGenFunction::SymTableScopeTy varScope(cgf.symbolTable);
+  CIRGenFunction::SourceLocRAIIObject locRAII(cgf, cd->getSourceRange());
+  CIRGenFunction::LexicalScope lexScope{cgf, thunkFn.getLoc(), entryBb};
+
+  cgf.curFnInfo = &fnInfo;
+  cgf.startFunction(GlobalDecl(), cgm.getASTContext().VoidTy, thunkFn, thunkTy,
+                    functionArgs, cd->getLocation(), SourceLocation());
+  setCXXABIThisValue(cgf, loadIncomingCXXThis(cgf));
+  cgf.cxxThisValue = cgf.cxxabiThisValue;
+  mlir::Value thisVal = cgf.loadCXXThis();
+
+  mlir::Value srcVal =
+      isCopy ? cgf.getBuilder().createLoad(
+                   loc, cgf.getAddrOfLocalVar(srcParam))
+             : mlir::Value();
+
+  CallArgList args;
+  args.add(RValue::get(thisVal), cd->getThisType());
+  if (srcVal)
+    args.add(RValue::get(srcVal), srcParam->getType());
+
+  SmallVector<const Stmt *, 4> argVec;
+  for (const CXXDefaultArgExpr *expr :
+       cd->getCtorClosureDefaultArgs().drop_front(isCopy ? 1 : 0))
+    argVec.push_back(expr);
+  assert(argVec.size() == cd->getNumParams() - isCopy);
+
+  CIRGenFunction::RunCleanupsScope cleanups(cgf);
+
+  const auto *fpt = cd->getType()->castAs<FunctionProtoType>();
+  cgf.emitCallArgs(args, fpt,
+                   llvm::iterator_range<CallExpr::const_arg_iterator>(
+                       argVec.begin(), argVec.end()),
+                   cd, isCopy ? 1 : 0);
+
+  AddedStructorArgCounts extraArgs =
+      addImplicitConstructorArgs(cgf, cd, Ctor_Complete,
+                                 /*forVirtualBase=*/false,
+                                 /*delegating=*/false, args);
+  cir::FuncOp calleePtr =
+      cgm.getAddrOfCXXStructor(GlobalDecl(cd, Ctor_Complete));
+  CIRGenCallee callee =
+      CIRGenCallee::forDirect(calleePtr, GlobalDecl(cd, Ctor_Complete));
+  const CIRGenFunctionInfo &calleeInfo = cgm.getTypes().arrangeCXXConstructorCall(
+      args, cd, Ctor_Complete, extraArgs.prefix, extraArgs.suffix,
+      /*passProtoArgs=*/true);
+  cgf.emitCall(calleeInfo, callee, ReturnValueSlot(), args,
+               /*callOrTryCall=*/nullptr, /*isMustTail=*/false,
+               cd->getSourceRange());
+
+  cleanups.forceCleanup();
+
+  cir::ReturnOp::create(cgf.getBuilder(), loc);
+  cgf.finishFunction(SourceLocation());
+
+  return thunkFn;
+}
+
+mlir::Attribute
+CIRGenMicrosoftCXXABI::getCatchableType(mlir::Location loc, QualType T,
+                                        uint32_t NVOffset,
+                                        int32_t VBPtrOffset,
+                                        uint32_t VBIndex) {
+  assert(!T->isReferenceType());
+
+  CXXRecordDecl *RD = T->getAsCXXRecordDecl();
+  const CXXConstructorDecl *CD =
+      RD ? cgm.getASTContext().getCopyConstructorForExceptionObject(
+               const_cast<CXXRecordDecl *>(RD))
+         : nullptr;
+  CXXCtorType CT = Ctor_Complete;
+  if (CD)
+    if (!hasDefaultCXXMethodCC(cgm.getASTContext(), CD) ||
+        CD->getNumParams() != 1)
+      CT = Ctor_CopyingClosure;
+
+  uint32_t Size = cgm.getASTContext().getTypeSizeInChars(T).getQuantity();
+  SmallString<256> MangledName;
+  {
+    llvm::raw_svector_ostream Out(MangledName);
+    getMangleContext().mangleCXXCatchableType(T, CD, CT, Size, NVOffset,
+                                              VBPtrOffset, VBIndex, Out);
+  }
+
+  CIRGenBuilderTy &builder = cgm.getBuilder();
+  cir::PointerType voidPtrTy = builder.getVoidPtrTy();
+  if (auto gv = cgm.getGlobalValue(MangledName)) {
+    auto globalOp = cast<cir::GlobalOp>(gv);
+    return getImageRelativeAttr(
+        builder.getGlobalViewAttr(voidPtrTy, globalOp), loc);
+  }
+
+  mlir::Attribute TD =
+      getImageRelativeAttr(getAddrOfRTTIDescriptor(loc, T), loc);
+
+  mlir::Attribute CopyCtorAttr;
+  if (CD) {
+    if (CT == Ctor_CopyingClosure) {
+      cir::FuncOp closureFn = getAddrOfCXXCtorClosure(CD, Ctor_CopyingClosure);
+      CopyCtorAttr = mlir::FlatSymbolRefAttr::get(closureFn.getSymNameAttr());
+    } else {
+      cir::FuncOp structorFn =
+          cgm.getAddrOfCXXStructor(GlobalDecl(CD, Ctor_Complete));
+      CopyCtorAttr = mlir::FlatSymbolRefAttr::get(structorFn.getSymNameAttr());
+    }
+  }
+  CopyCtorAttr = getImageRelativeAttr(CopyCtorAttr, loc);
+
+  bool IsScalar = !RD;
+  bool HasVirtualBases = false;
+  bool IsStdBadAlloc = false;
+  QualType PointeeType = T;
+  if (T->isPointerType())
+    PointeeType = T->getPointeeType();
+  if (const CXXRecordDecl *PointeeRD = PointeeType->getAsCXXRecordDecl()) {
+    HasVirtualBases = PointeeRD->getNumVBases() > 0;
+    if (IdentifierInfo *II = PointeeRD->getIdentifier())
+      IsStdBadAlloc = II->isStr("bad_alloc") && PointeeRD->isInStdNamespace();
+  }
+
+  uint32_t Flags = 0;
+  if (IsScalar)
+    Flags |= 1;
+  if (HasVirtualBases)
+    Flags |= 4;
+  if (IsStdBadAlloc)
+    Flags |= 16;
+
+  cir::IntType s32Ty = builder.getSInt32Ty();
+  cir::RecordType ctType = getCatchableTypeType();
+  mlir::Attribute fields[] = {
+      cir::IntAttr::get(s32Ty, Flags),
+      TD,
+      cir::IntAttr::get(s32Ty, NVOffset),
+      cir::IntAttr::get(s32Ty, VBPtrOffset),
+      cir::IntAttr::get(s32Ty, VBIndex),
+      cir::IntAttr::get(s32Ty, Size),
+      CopyCtorAttr
+  };
+
+  cir::GlobalOp gv =
+      cgm.createGlobalOp(loc, MangledName, ctType, /*isConstant=*/true);
+  gv.setInitialValueAttr(cir::ConstRecordAttr::get(
+      ctType, mlir::ArrayAttr::get(&cgm.getMLIRContext(), fields)));
+  cir::GlobalLinkageKind linkage = getLinkageForRTTI(T);
+  gv.setLinkage(linkage);
+  gv.setSectionAttr(builder.getStringAttr(".xdata"));
+  if (cgm.supportsCOMDAT() && cir::isWeakForLinker(linkage))
+    gv.setSelfComdat();
+  mlir::SymbolTable::setSymbolVisibility(gv,
+                                         CIRGenModule::getMLIRVisibility(gv));
+
+  return getImageRelativeAttr(builder.getGlobalViewAttr(voidPtrTy, gv), loc);
+}
+
+cir::GlobalOp CIRGenMicrosoftCXXABI::getCatchableTypeArray(mlir::Location loc,
+                                                           QualType T) {
+  assert(!T->isReferenceType());
+
+  auto &CTA = catchableTypeArrays[T];
+  if (CTA)
+    return CTA;
+
+  llvm::SmallSetVector<mlir::Attribute, 2> catchableTypes;
+
+  const CXXRecordDecl *mostDerivedClass = nullptr;
+  bool isPointer = T->isPointerType();
+  if (isPointer)
+    mostDerivedClass = T->getPointeeType()->getAsCXXRecordDecl();
+  else
+    mostDerivedClass = T->getAsCXXRecordDecl();
+
+  if (mostDerivedClass) {
+    const ASTContext &context = cgm.getASTContext();
+    const ASTRecordLayout &mostDerivedLayout =
+        context.getASTRecordLayout(mostDerivedClass);
+    MicrosoftVTableContext &vtableContext = cgm.getMicrosoftVTableContext();
+    SmallVector<MSRTTIClass, 8> classes;
+    serializeClassHierarchy(classes, mostDerivedClass);
+    classes.front().initialize(/*Parent=*/nullptr, /*Specifier=*/nullptr);
+    detectAmbiguousBases(classes);
+    for (const MSRTTIClass &cl : classes) {
+      if (cl.Flags & (MSRTTIClass::IsPrivateOnPath | MSRTTIClass::IsAmbiguous))
+        continue;
+      uint32_t offsetInVBTable = 0;
+      int32_t vbPtrOffset = -1;
+      if (cl.VirtualRoot) {
+        offsetInVBTable =
+            vtableContext.getVBTableIndex(mostDerivedClass, cl.VirtualRoot) * 4;
+        vbPtrOffset = mostDerivedLayout.getVBPtrOffset().getQuantity();
+      }
+
+      CanQualType rttiTy = context.getCanonicalTagType(cl.RD);
+      if (isPointer)
+        rttiTy = context.getPointerType(rttiTy);
+      catchableTypes.insert(getCatchableType(loc, rttiTy, cl.OffsetInVBase,
+                                             vbPtrOffset, offsetInVBTable));
+    }
+  }
+
+  catchableTypes.insert(getCatchableType(loc, T));
+
+  if (isPointer && T->getPointeeType()->isObjectType())
+    catchableTypes.insert(getCatchableType(loc, cgm.getASTContext().VoidPtrTy));
+
+  if (T->isNullPtrType())
+    catchableTypes.insert(getCatchableType(loc, cgm.getASTContext().VoidPtrTy));
+
+  uint32_t numEntries = catchableTypes.size();
+  CIRGenBuilderTy &builder = cgm.getBuilder();
+  cir::IntType s32Ty = builder.getSInt32Ty();
+  mlir::Type ctType = getImageRelativeType(builder.getVoidPtrTy());
+  cir::ArrayType at = cir::ArrayType::get(ctType, numEntries);
+  cir::RecordType ctaType = getCatchableTypeArrayType(numEntries);
+
+  mlir::Attribute fields[] = {
+      cir::IntAttr::get(s32Ty, numEntries),
+      cir::ConstArrayAttr::get(
+          at, mlir::ArrayAttr::get(&cgm.getMLIRContext(),
+                                   catchableTypes.getArrayRef()))
+  };
+
+  SmallString<256> mangledName;
+  {
+    llvm::raw_svector_ostream out(mangledName);
+    getMangleContext().mangleCXXCatchableTypeArray(T, numEntries, out);
+  }
+
+  if (auto gv = cgm.getGlobalValue(mangledName)) {
+    CTA = cast<cir::GlobalOp>(gv);
+    return CTA;
+  }
+
+  CTA = cgm.createGlobalOp(loc, mangledName, ctaType, /*isConstant=*/true);
+  CTA.setInitialValueAttr(cir::ConstRecordAttr::get(
+      ctaType, mlir::ArrayAttr::get(&cgm.getMLIRContext(), fields)));
+  cir::GlobalLinkageKind linkage = getLinkageForRTTI(T);
+  CTA.setLinkage(linkage);
+  CTA.setSectionAttr(builder.getStringAttr(".xdata"));
+  if (cgm.supportsCOMDAT() && cir::isWeakForLinker(linkage))
+    CTA.setSelfComdat();
+  mlir::SymbolTable::setSymbolVisibility(CTA,
+                                         CIRGenModule::getMLIRVisibility(CTA));
+  return CTA;
+}
+
+cir::GlobalOp CIRGenMicrosoftCXXABI::getThrowInfo(mlir::Location loc,
+                                                  QualType throwType) {
+  auto it = throwInfos.find(throwType);
+  if (it != throwInfos.end())
+    return it->second;
+
+  bool isConst, isVolatile, isUnaligned;
+  QualType decomposedType = decomposeTypeForEH(
+      cgm.getASTContext(), throwType, isConst, isVolatile, isUnaligned);
+
+  cir::GlobalOp cta = getCatchableTypeArray(loc, decomposedType);
+  auto ctaRecordTy = mlir::cast<cir::RecordType>(cta.getSymType());
+  auto arrayMemberTy = mlir::cast<cir::ArrayType>(ctaRecordTy.getMembers()[1]);
+  uint32_t numEntries = arrayMemberTy.getSize();
+
+  SmallString<256> mangledName;
+  {
+    llvm::raw_svector_ostream out(mangledName);
+    getMangleContext().mangleCXXThrowInfo(decomposedType, isConst, isVolatile,
+                                          isUnaligned, numEntries, out);
+  }
+
+  if (auto gv = cgm.getGlobalValue(mangledName)) {
+    auto globalOp = cast<cir::GlobalOp>(gv);
+    throwInfos[throwType] = globalOp;
+    return globalOp;
+  }
+
+  uint32_t flags = 0;
+  if (isConst)
+    flags |= 1;
+  if (isVolatile)
+    flags |= 2;
+  if (isUnaligned)
+    flags |= 4;
+
+  CIRGenBuilderTy &builder = cgm.getBuilder();
+  cir::PointerType voidPtrTy = builder.getVoidPtrTy();
+
+  mlir::Attribute cleanupFnAttr;
+  if (const CXXRecordDecl *rd = decomposedType->getAsCXXRecordDecl()) {
+    if (CXXDestructorDecl *dtorD = rd->getDestructor()) {
+      if (!dtorD->isTrivial()) {
+        cir::FuncOp dtorFn =
+            cgm.getAddrOfCXXStructor(GlobalDecl(dtorD, Dtor_Complete));
+        cleanupFnAttr = mlir::FlatSymbolRefAttr::get(dtorFn.getSymNameAttr());
+      }
+    }
+  }
+  cleanupFnAttr = getImageRelativeAttr(cleanupFnAttr, loc);
+
+  mlir::Attribute forwardCompat = getImageRelativeAttr(mlir::Attribute(), loc);
+
+  mlir::Attribute pointerToCatchableTypes = getImageRelativeAttr(
+      builder.getGlobalViewAttr(voidPtrTy, cta), loc);
+
+  cir::RecordType tiType = getThrowInfoType();
+  cir::IntType s32Ty = builder.getSInt32Ty();
+  mlir::Attribute fields[] = {
+      cir::IntAttr::get(s32Ty, flags),
+      cleanupFnAttr,
+      forwardCompat,
+      pointerToCatchableTypes
+  };
+
+  cir::GlobalOp gv =
+      cgm.createGlobalOp(loc, mangledName, tiType, /*isConstant=*/true);
+  gv.setInitialValueAttr(cir::ConstRecordAttr::get(
+      tiType, mlir::ArrayAttr::get(&cgm.getMLIRContext(), fields)));
+  cir::GlobalLinkageKind linkage = getLinkageForRTTI(decomposedType);
+  gv.setLinkage(linkage);
+  gv.setSectionAttr(builder.getStringAttr(".xdata"));
+  if (cgm.supportsCOMDAT() && cir::isWeakForLinker(linkage))
+    gv.setSelfComdat();
+  mlir::SymbolTable::setSymbolVisibility(gv,
+                                         CIRGenModule::getMLIRVisibility(gv));
+
+  throwInfos[throwType] = gv;
+  return gv;
+}
+
 void CIRGenMicrosoftCXXABI::emitRethrow(CIRGenFunction &cgf, bool isNoReturn) {
   if (isNoReturn) {
     CIRGenBuilderTy &builder = cgf.getBuilder();
     assert(cgf.currSrcLoc && "expected source location");
     mlir::Location loc = cgf.getLoc(*cgf.currSrcLoc);
-    cir::ThrowOp::create(builder, loc, mlir::Value(), mlir::FlatSymbolRefAttr(),
-                         mlir::FlatSymbolRefAttr());
-    cir::UnreachableOp::create(builder, loc);
+    insertThrowAndSplit(builder, loc);
   } else {
     cgm.errorNYI("emitRethrow with isNoReturn false: MSVC ABI");
   }
@@ -1798,7 +2460,20 @@ void CIRGenMicrosoftCXXABI::emitRethrow(CIRGenFunction &cgf, bool isNoReturn) {
 
 void CIRGenMicrosoftCXXABI::emitThrow(CIRGenFunction &cgf,
                                       const CXXThrowExpr *e) {
-  cgf.cgm.errorNYI(e->getSourceRange(), "emitThrow: MSVC ABI");
+  const Expr *subExpr = e->getSubExpr();
+  assert(subExpr && "subExpr cannot be null");
+  QualType throwType = subExpr->getType();
+  mlir::Location loc = cgf.getLoc(e->getSourceRange());
+
+  Address ai = cgf.createMemTempWithoutCast(throwType, loc, "exception");
+  cgf.emitAnyExprToMem(subExpr, ai, throwType.getQualifiers(),
+                       /*isInitializer=*/true);
+
+  cir::GlobalOp ti = getThrowInfo(loc, throwType);
+  auto typeInfoAttr = mlir::FlatSymbolRefAttr::get(ti.getSymNameAttr());
+
+  insertThrowAndSplit(cgf.getBuilder(), loc, ai.getPointer(), typeInfoAttr,
+                      mlir::FlatSymbolRefAttr());
 }
 
 void CIRGenMicrosoftCXXABI::registerGlobalDtor(const VarDecl *vd,
