@@ -348,12 +348,15 @@ const TargetCIRGenInfo &CIRGenModule::getTargetCIRGenInfo() {
 
   const llvm::Triple &triple = getTarget().getTriple();
   switch (triple.getArch()) {
+  case llvm::Triple::x86: {
+    theTargetCIRGenInfo = createX86_32TargetCIRGenInfo(genTypes);
+    return *theTargetCIRGenInfo;
+  }
   default:
     assert(!cir::MissingFeatures::targetCIRGenInfoArch());
 
     // Currently we just fall through to x86_64.
     [[fallthrough]];
-
   case llvm::Triple::x86_64: {
     switch (triple.getOS()) {
     default:

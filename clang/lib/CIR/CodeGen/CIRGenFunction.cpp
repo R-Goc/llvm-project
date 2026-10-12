@@ -581,6 +581,7 @@ void CIRGenFunction::startFunction(GlobalDecl gd, QualType returnType,
          "CIRGenFunction can only be used for one function at a time");
 
   curFn = fn;
+  fnRetTy = returnType;
 
   const Decl *d = gd.getDecl();
 
