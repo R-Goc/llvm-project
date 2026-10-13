@@ -5262,6 +5262,24 @@ mlir::LogicalResult CIRToLLVMBrOpLowering::matchAndRewrite(
               op, currentPadToken, op.getDest());
           return mlir::LogicalResult::success();
         }
+      } else {
+        // currentPadToken is a cleanuppad
+        if (currentMSVCEHState.blockPadMap.lookup(op.getDest()) !=
+            currentPadToken) {
+          mlir::Block *destBlock = op.getDest();
+          bool isTrivialResume = false;
+          if (destBlock) {
+            auto it = destBlock->begin();
+            if (it != destBlock->end() && mlir::isa<cir::EhInitiateOp>(&*it))
+              ++it;
+            if (it != destBlock->end() && mlir::isa<cir::ResumeOp>(&*it))
+              isTrivialResume = true;
+          }
+          mlir::Block *unwindDest = isTrivialResume ? nullptr : destBlock;
+          rewriter.replaceOpWithNewOp<mlir::LLVM::CleanupRetOp>(
+              op, currentPadToken, unwindDest);
+          return mlir::LogicalResult::success();
+        }
       }
     }
   }
