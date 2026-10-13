@@ -1714,7 +1714,8 @@ LogicalResult InvokeOp::verify() {
     return emitError("must have at least one operation in unwind destination");
 
   // In unwind destination, first operation must be LandingpadOp or funclet pad.
-  if (!isa<LandingpadOp, CleanupPadOp, NoneTokenOp>(unwindDest->front()))
+  if (!isa<LandingpadOp, CleanupPadOp, CatchSwitchOp, NoneTokenOp>(
+          unwindDest->front()))
     return emitError("first operation in unwind destination should be a "
                      "llvm.landingpad or funclet pad operation");
 
@@ -1995,6 +1996,65 @@ ParseResult CleanupRetOp::parse(OpAsmParser &parser, OperationState &result) {
   }
   if (parser.parseOptionalAttrDict(result.attributes))
     return failure();
+  return success();
+}
+
+//===----------------------------------------------------------------------===//
+// CatchSwitchOp
+//===----------------------------------------------------------------------===//
+
+void CatchSwitchOp::print(OpAsmPrinter &p) {
+  p << " within " << getParentPad() << " [";
+  llvm::interleaveComma(getHandlers(), p, [&](Block *b) { p << b; });
+  p << "] unwind ";
+  if (hasUnwindDest())
+    p << getUnwindDest();
+  else
+    p << "to caller";
+  p.printOptionalAttrDict((*this)->getAttrs(), {"has_unwind_dest"});
+}
+
+ParseResult CatchSwitchOp::parse(OpAsmParser &parser, OperationState &result) {
+  if (parser.parseKeyword("within"))
+    return failure();
+
+  OpAsmParser::UnresolvedOperand parentPad;
+  if (parser.parseOperand(parentPad))
+    return failure();
+  Type tokenType = parser.getBuilder().getType<TokenType>();
+  if (parser.resolveOperand(parentPad, tokenType, result.operands))
+    return failure();
+
+  SmallVector<Block *> handlers;
+  if (parser.parseCommaSeparatedList(OpAsmParser::Delimiter::Square, [&]() {
+        Block *handler = nullptr;
+        if (parser.parseSuccessor(handler))
+          return failure();
+        handlers.push_back(handler);
+        return success();
+      }))
+    return failure();
+  for (Block *handler : handlers)
+    result.addSuccessors(handler);
+
+  if (parser.parseKeyword("unwind"))
+    return failure();
+
+  if (succeeded(parser.parseOptionalKeyword("to"))) {
+    if (parser.parseKeyword("caller"))
+      return failure();
+  } else {
+    Block *unwindDest = nullptr;
+    if (parser.parseSuccessor(unwindDest))
+      return failure();
+    result.addSuccessors(unwindDest);
+    result.addAttribute("has_unwind_dest", parser.getBuilder().getUnitAttr());
+  }
+
+  if (parser.parseOptionalAttrDict(result.attributes))
+    return failure();
+
+  result.addTypes(tokenType);
   return success();
 }
 

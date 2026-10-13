@@ -2496,6 +2496,8 @@ static void setLoweredCallAttributes(CallLikeOp op,
 
 struct MSVCEHState {
   llvm::DenseMap<mlir::Block *, mlir::Value> blockPadMap;
+  llvm::DenseMap<mlir::Block *, mlir::Value> catchSwitchMap;
+  llvm::SmallPtrSet<mlir::Value, 4> catchPadTokens;
 };
 
 static thread_local MSVCEHState currentMSVCEHState;
@@ -2512,6 +2514,8 @@ static mlir::Value getFuncletPadToken(mlir::Operation *op) {
     if (&currOp == op)
       break;
     if (auto padOp = mlir::dyn_cast<mlir::LLVM::CleanupPadOp>(&currOp))
+      return padOp.getResult();
+    if (auto padOp = mlir::dyn_cast<mlir::LLVM::CatchPadOp>(&currOp))
       return padOp.getResult();
   }
   return nullptr;
@@ -4456,6 +4460,9 @@ static void prepareTypeConverter(mlir::LLVMTypeConverter &converter,
   converter.addConversion([&](cir::CleanupTokenType) {
     return mlir::TokenType::get(&converter.getContext());
   });
+  converter.addConversion([&](cir::CatchTokenType) {
+    return mlir::TokenType::get(&converter.getContext());
+  });
   converter.addConversion([&](cir::EhTokenType) {
     return mlir::TokenType::get(&converter.getContext());
   });
@@ -4911,14 +4918,11 @@ public:
     if (tripleAttr &&
         llvm::Triple(tripleAttr.getValue()).isWindowsMSVCEnvironment()) {
       mlir::Value currentPadToken = getFuncletPadToken(op);
-      if (!currentPadToken) {
-        if (adaptor.getEhToken() &&
-            mlir::isa<mlir::TokenType>(adaptor.getEhToken().getType()))
-          currentPadToken = adaptor.getEhToken();
+      if (!currentPadToken ||
+          currentMSVCEHState.catchPadTokens.contains(currentPadToken)) {
+        rewriter.replaceOpWithNewOp<mlir::LLVM::UnreachableOp>(op);
+        return mlir::success();
       }
-      if (!currentPadToken)
-        return op->emitError(
-            "Could not find enclosing funclet pad for cir.resume");
 
       rewriter.replaceOpWithNewOp<mlir::LLVM::CleanupRetOp>(
           op, currentPadToken, /*unwindDest=*/nullptr);
@@ -4998,6 +5002,143 @@ public:
   }
 };
 
+class CIRToLLVMEhDispatchOpLowering
+    : public mlir::OpConversionPattern<cir::EhDispatchOp> {
+public:
+  using mlir::OpConversionPattern<cir::EhDispatchOp>::OpConversionPattern;
+
+  mlir::LogicalResult
+  matchAndRewrite(cir::EhDispatchOp op, OpAdaptor adaptor,
+                  mlir::ConversionPatternRewriter &rewriter) const override {
+    mlir::Location loc = op.getLoc();
+    mlir::Value parentPad = getFuncletPadToken(op);
+    if (!parentPad || !mlir::isa<mlir::TokenType>(parentPad.getType())) {
+      parentPad = mlir::LLVM::NoneTokenOp::create(
+          rewriter, loc, mlir::TokenType::get(rewriter.getContext()));
+    }
+
+    SmallVector<mlir::Block *> handlers;
+    for (mlir::Block *handler : op.getCatchDestinations())
+      handlers.push_back(handler);
+
+    mlir::Block *unwindDest = nullptr;
+    if (op.getDefaultIsCatchAll()) {
+      handlers.push_back(op.getDefaultDestination());
+    } else {
+      mlir::Block *defBlock = op.getDefaultDestination();
+      bool isTrivialResume = false;
+      if (defBlock) {
+
+        auto it = defBlock->begin();
+        if (it != defBlock->end() && mlir::isa<cir::EhInitiateOp>(&*it))
+          ++it;
+        if (it != defBlock->end() && mlir::isa<cir::ResumeOp>(&*it))
+          isTrivialResume = true;
+      }
+      if (!isTrivialResume)
+        unwindDest = defBlock;
+    }
+
+    auto csOp = mlir::LLVM::CatchSwitchOp::create(
+        rewriter, loc, parentPad, handlers, unwindDest);
+    mlir::Value csToken = csOp.getResult();
+
+    for (mlir::Block *handler : handlers)
+      currentMSVCEHState.catchSwitchMap[handler] = csToken;
+
+    rewriter.eraseOp(op);
+    return mlir::success();
+  }
+};
+
+class CIRToLLVMBeginCatchOpLowering
+    : public mlir::OpConversionPattern<cir::BeginCatchOp> {
+public:
+  using mlir::OpConversionPattern<cir::BeginCatchOp>::OpConversionPattern;
+
+  mlir::LogicalResult
+  matchAndRewrite(cir::BeginCatchOp op, OpAdaptor adaptor,
+                  mlir::ConversionPatternRewriter &rewriter) const override {
+    mlir::Location loc = op.getLoc();
+    mlir::Value csToken =
+        currentMSVCEHState.catchSwitchMap.lookup(op->getBlock());
+    if (!csToken)
+      return op->emitError(
+          "Could not find catchswitch token for cir.begin_catch");
+
+    auto llvmPtrTy = mlir::LLVM::LLVMPointerType::get(rewriter.getContext());
+    mlir::Value arg0;
+    if (op.getTypeInfoAttr()) {
+      arg0 = mlir::LLVM::AddressOfOp::create(
+          rewriter, loc, llvmPtrTy, op.getTypeInfoAttr().getSymbol());
+    } else {
+      arg0 = mlir::LLVM::ZeroOp::create(rewriter, loc, llvmPtrTy);
+    }
+
+    auto i32Ty = rewriter.getI32Type();
+    int32_t flags = op.getFlagsAttr() ? op.getFlagsAttr().getInt() : 0;
+    mlir::Value arg1 =
+        mlir::LLVM::ConstantOp::create(rewriter, loc, i32Ty, flags);
+
+    mlir::Value arg2 = adaptor.getParamAddr();
+    if (!arg2)
+      arg2 = mlir::LLVM::ZeroOp::create(rewriter, loc, llvmPtrTy);
+
+    auto catchPad = mlir::LLVM::CatchPadOp::create(
+        rewriter, loc, csToken, mlir::ValueRange{arg0, arg1, arg2});
+    mlir::Value cpToken = catchPad.getResult();
+
+    currentMSVCEHState.catchPadTokens.insert(cpToken);
+
+    llvm::SmallPtrSet<mlir::Block *, 4> exitBlocks;
+    for (mlir::Operation *user : op.getCatchToken().getUsers()) {
+      if (mlir::isa<cir::EndCatchOp>(user))
+        exitBlocks.insert(user->getBlock());
+    }
+
+    currentMSVCEHState.blockPadMap[op->getBlock()] = cpToken;
+    SmallVector<mlir::Block *, 4> worklist;
+    llvm::SmallPtrSet<mlir::Block *, 8> visited;
+    worklist.push_back(op->getBlock());
+    visited.insert(op->getBlock());
+    while (!worklist.empty()) {
+      mlir::Block *curr = worklist.pop_back_val();
+      currentMSVCEHState.blockPadMap[curr] = cpToken;
+      bool isExit = exitBlocks.contains(curr);
+      if (!isExit) {
+        for (auto &currOp : *curr) {
+          if (mlir::isa<cir::EndCatchOp>(&currOp)) {
+            isExit = true;
+            break;
+          }
+        }
+      }
+      if (!isExit) {
+        for (mlir::Block *succ : curr->getSuccessors()) {
+          if (visited.insert(succ).second)
+            worklist.push_back(succ);
+        }
+      }
+    }
+
+    rewriter.replaceOp(op, mlir::ValueRange{cpToken, arg2});
+    return mlir::success();
+  }
+};
+
+class CIRToLLVMEndCatchOpLowering
+    : public mlir::OpConversionPattern<cir::EndCatchOp> {
+public:
+  using mlir::OpConversionPattern<cir::EndCatchOp>::OpConversionPattern;
+
+  mlir::LogicalResult
+  matchAndRewrite(cir::EndCatchOp op, OpAdaptor adaptor,
+                  mlir::ConversionPatternRewriter &rewriter) const override {
+    rewriter.eraseOp(op);
+    return mlir::success();
+  }
+};
+
 void ConvertCIRToLLVMPass::runOnOperation() {
   llvm::TimeTraceScope scope("Convert CIR to LLVM Pass");
 
@@ -5030,7 +5171,10 @@ void ConvertCIRToLLVMPass::runOnOperation() {
                CIRToLLVMEndCleanupOpLowering,
                CIRToLLVMResumeOpLowering,
                CIRToLLVMEhInitiateOpLowering,
-               CIRToLLVMEhTerminateOpLowering>(
+               CIRToLLVMEhTerminateOpLowering,
+               CIRToLLVMEhDispatchOpLowering,
+               CIRToLLVMBeginCatchOpLowering,
+               CIRToLLVMEndCatchOpLowering>(
       converter, patterns.getContext());
 
   processCIRAttrs(module);
@@ -5101,6 +5245,27 @@ void ConvertCIRToLLVMPass::runOnOperation() {
 mlir::LogicalResult CIRToLLVMBrOpLowering::matchAndRewrite(
     cir::BrOp op, OpAdaptor adaptor,
     mlir::ConversionPatternRewriter &rewriter) const {
+  auto mod = op->getParentOfType<mlir::ModuleOp>();
+  auto tripleAttr = mod ? mod->getAttrOfType<mlir::StringAttr>(
+                              cir::CIRDialect::getTripleAttrName())
+                        : nullptr;
+  const bool isMSVC =
+      tripleAttr &&
+      llvm::Triple(tripleAttr.getValue()).isWindowsMSVCEnvironment();
+
+  if (isMSVC) {
+    if (mlir::Value currentPadToken = getFuncletPadToken(op)) {
+      if (currentMSVCEHState.catchPadTokens.contains(currentPadToken)) {
+        if (currentMSVCEHState.blockPadMap.lookup(op.getDest()) !=
+            currentPadToken) {
+          rewriter.replaceOpWithNewOp<mlir::LLVM::CatchRetOp>(
+              op, currentPadToken, op.getDest());
+          return mlir::LogicalResult::success();
+        }
+      }
+    }
+  }
+
   rewriter.replaceOpWithNewOp<mlir::LLVM::BrOp>(op, adaptor.getOperands(),
                                                 op.getDest());
   return mlir::LogicalResult::success();

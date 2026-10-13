@@ -853,6 +853,64 @@ def LLVM_CleanupRetOp : LLVM_TerminatorOp<"cleanupret"> {
   }];
 }
 
+def LLVM_CatchSwitchOp : LLVM_TerminatorOp<"catchswitch", [
+    TokenConsumerTrait
+]> {
+  let summary = "LLVM catchswitch instruction";
+  let arguments = (ins Token:$parentPad);
+  let results = (outs Token:$res);
+  let successors = (successor VariadicSuccessor<AnySuccessor>:$successors);
+  let builders = [
+    OpBuilder<(ins "Value":$parentPad, "ArrayRef<Block *>":$handlers,
+                   CArg<"Block *", "nullptr">:$unwindDest), [{
+      SmallVector<Block *> succs(handlers.begin(), handlers.end());
+      if (unwindDest)
+        succs.push_back(unwindDest);
+      build($_builder, $_state, $_builder.getType<TokenType>(), parentPad, succs);
+      if (unwindDest)
+        $_state.addAttribute("has_unwind_dest", $_builder.getUnitAttr());
+    }]>
+  ];
+  let hasCustomAssemblyFormat = 1;
+  let extraClassDeclaration = [{
+    bool hasUnwindDest() { return (*this)->hasAttr("has_unwind_dest"); }
+    Block *getUnwindDest() {
+      return hasUnwindDest() ? getSuccessors().back() : nullptr;
+    }
+    ::mlir::SuccessorRange getHandlers() {
+      if (hasUnwindDest())
+        return getSuccessors().drop_back();
+      return getSuccessors();
+    }
+    unsigned getNumHandlers() {
+      return getHandlers().size();
+    }
+  }];
+}
+
+def LLVM_CatchPadOp : LLVM_Op<"catchpad", [TokenConsumerTrait]> {
+  let summary = "LLVM catchpad instruction";
+  let arguments = (ins Token:$catchSwitch, Variadic<LLVM_Type>:$args);
+  let results = (outs Token:$res);
+  let assemblyFormat = [{
+    `within` $catchSwitch (`[` $args^ `:` type($args) `]`)? attr-dict
+  }];
+  let builders = [
+    OpBuilder<(ins "Value":$catchSwitch), [{
+      build($_builder, $_state, catchSwitch, ValueRange());
+    }]>
+  ];
+}
+
+def LLVM_CatchRetOp : LLVM_TerminatorOp<"catchret", [TokenConsumerTrait]> {
+  let summary = "LLVM catchret instruction";
+  let arguments = (ins Token:$catchPad);
+  let successors = (successor AnySuccessor:$dest);
+  let assemblyFormat = [{
+    `from` $catchPad `to` $dest attr-dict
+  }];
+}
+
 //===----------------------------------------------------------------------===//
 // VAArgOp
 //===----------------------------------------------------------------------===//

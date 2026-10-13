@@ -1256,7 +1256,8 @@ mlir::LogicalResult MicrosoftEHLowering::lowerFunc(cir::FuncOp funcOp) {
   SmallVector<cir::TryCallOp> tryCalls;
   SmallVector<cir::TryThrowOp> tryThrows;
   funcOp.walk([&](mlir::Operation *op) {
-    if (isa<cir::EhInitiateOp, cir::BeginCleanupOp>(op))
+    if (isa<cir::EhInitiateOp, cir::BeginCleanupOp, cir::EhDispatchOp,
+            cir::BeginCatchOp>(op))
       hasEHOps = true;
     if (isa<cir::EhTerminateOp>(op)) {
       hasEHOps = true;
@@ -1294,14 +1295,38 @@ mlir::LogicalResult MicrosoftEHLowering::lowerFunc(cir::FuncOp funcOp) {
     ensureStdTerminateDecl(funcOp.getLoc());
 
   for (cir::EhDispatchOp dispatch : dispatches) {
-    if (dispatch.getDefaultIsCatchAll()) {
-      builder.setInsertionPoint(dispatch);
-      cir::BrOp::create(builder, dispatch.getLoc(),
-                        dispatch.getDefaultDestination(),
-                        mlir::ValueRange{dispatch.getEhToken()});
-      dispatch.erase();
+    // If the dispatch only targets cir.eh.terminate, bypass it so try_call
+    // unwinds directly to the terminate cleanuppad block.
+    if (dispatch.getCatchDestinations().empty() &&
+        dispatch.getDefaultDestination()) {
+      bool isTerminate = false;
+      for (auto &op : *dispatch.getDefaultDestination()) {
+        if (isa<cir::EhTerminateOp>(&op)) {
+          isTerminate = true;
+          break;
+        }
+      }
+      if (isTerminate) {
+        builder.setInsertionPoint(dispatch);
+        cir::BrOp::create(builder, dispatch.getLoc(),
+                          dispatch.getDefaultDestination(),
+                          mlir::ValueRange{dispatch.getEhToken()});
+        dispatch.erase();
+      }
     }
   }
+
+  SmallVector<cir::InitCatchParamOp> initCatchOps;
+  funcOp.walk([&](cir::InitCatchParamOp op) { initCatchOps.push_back(op); });
+  for (cir::InitCatchParamOp op : initCatchOps)
+    op.erase();
+
+  SmallVector<cir::ConstructCatchParamOp> constructCatchOps;
+  funcOp.walk([&](cir::ConstructCatchParamOp op) {
+    constructCatchOps.push_back(op);
+  });
+  for (cir::ConstructCatchParamOp op : constructCatchOps)
+    op.erase();
 
   // Follow trampolines from an unwind destination block to the final EH
   // handler block (e.g. cir.begin_cleanup or cir.eh.terminate).
@@ -1309,14 +1334,6 @@ mlir::LogicalResult MicrosoftEHLowering::lowerFunc(cir::FuncOp funcOp) {
     mlir::Block *curr = block;
     llvm::SmallPtrSet<mlir::Block *, 4> visited;
     while (visited.insert(curr).second) {
-      if (auto dispatch =
-              dyn_cast_or_null<cir::EhDispatchOp>(curr->getTerminator())) {
-        if (dispatch.getDefaultIsCatchAll() &&
-            dispatch.getCatchDestinations().empty()) {
-          curr = dispatch.getDefaultDestination();
-          continue;
-        }
-      }
       if (auto br = dyn_cast_or_null<cir::BrOp>(curr->getTerminator())) {
         bool isTrampoline = true;
         for (auto &op : *curr) {

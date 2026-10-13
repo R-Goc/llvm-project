@@ -785,6 +785,39 @@ convertOperationImpl(Operation &opInst, llvm::IRBuilderBase &builder,
     return success();
   }
 
+  if (auto csOp = dyn_cast<LLVM::CatchSwitchOp>(opInst)) {
+    llvm::Value *parentPad = moduleTranslation.lookupValue(csOp.getParentPad());
+    llvm::BasicBlock *unwindBB = nullptr;
+    if (csOp.hasUnwindDest())
+      unwindBB = moduleTranslation.lookupBlock(csOp.getUnwindDest());
+    llvm::CatchSwitchInst *cs = builder.CreateCatchSwitch(
+        parentPad, unwindBB, csOp.getNumHandlers());
+    for (Block *handler : csOp.getHandlers())
+      cs->addHandler(moduleTranslation.lookupBlock(handler));
+    moduleTranslation.mapValue(csOp.getResult(), cs);
+    moduleTranslation.mapBranch(&opInst, cs);
+    return success();
+  }
+
+  if (auto cpOp = dyn_cast<LLVM::CatchPadOp>(opInst)) {
+    llvm::Value *catchSwitch =
+        moduleTranslation.lookupValue(cpOp.getCatchSwitch());
+    SmallVector<llvm::Value *> args =
+        moduleTranslation.lookupValues(cpOp.getArgs());
+    llvm::CatchPadInst *pad = builder.CreateCatchPad(catchSwitch, args);
+    moduleTranslation.mapValue(cpOp.getResult(), pad);
+    return success();
+  }
+
+  if (auto crOp = dyn_cast<LLVM::CatchRetOp>(opInst)) {
+    auto *catchPad = cast<llvm::CatchPadInst>(
+        moduleTranslation.lookupValue(crOp.getCatchPad()));
+    llvm::BasicBlock *destBB = moduleTranslation.lookupBlock(crOp.getDest());
+    llvm::CatchReturnInst *ret = builder.CreateCatchRet(catchPad, destBB);
+    moduleTranslation.mapBranch(&opInst, ret);
+    return success();
+  }
+
   // Emit branches.  We need to look up the remapped blocks and ignore the
   // block arguments that were transformed into PHI nodes.
   if (auto brOp = dyn_cast<LLVM::BrOp>(opInst)) {
