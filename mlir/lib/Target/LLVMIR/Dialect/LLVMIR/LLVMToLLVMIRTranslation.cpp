@@ -763,6 +763,28 @@ convertOperationImpl(Operation &opInst, llvm::IRBuilderBase &builder,
     return success();
   }
 
+  if (auto cpOp = dyn_cast<LLVM::CleanupPadOp>(opInst)) {
+    llvm::Value *parentPad = moduleTranslation.lookupValue(cpOp.getParentPad());
+    SmallVector<llvm::Value *> args =
+        moduleTranslation.lookupValues(cpOp.getArgs());
+    llvm::CleanupPadInst *pad = builder.CreateCleanupPad(parentPad, args);
+    moduleTranslation.mapValue(cpOp.getResult(), pad);
+    return success();
+  }
+
+  if (auto crOp = dyn_cast<LLVM::CleanupRetOp>(opInst)) {
+    auto *cleanupPad = cast<llvm::CleanupPadInst>(
+        moduleTranslation.lookupValue(crOp.getCleanupPad()));
+    llvm::BasicBlock *unwindBB = nullptr;
+    if (!crOp.getUnwindDest().empty())
+      unwindBB = moduleTranslation.lookupBlock(crOp.getUnwindDest().front());
+    llvm::CleanupReturnInst *ret =
+        builder.CreateCleanupRet(cleanupPad, unwindBB);
+    if (unwindBB)
+      moduleTranslation.mapBranch(&opInst, ret);
+    return success();
+  }
+
   // Emit branches.  We need to look up the remapped blocks and ignore the
   // block arguments that were transformed into PHI nodes.
   if (auto brOp = dyn_cast<LLVM::BrOp>(opInst)) {

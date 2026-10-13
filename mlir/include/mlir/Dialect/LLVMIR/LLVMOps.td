@@ -760,7 +760,8 @@ def LLVM_InvokeOp
                          DeclareOpInterfaceMethods<CallOpInterface>,
                          DeclareOpInterfaceMethods<SymbolUserOpInterface>,
                          DeclareOpInterfaceMethods<WeightedBranchOpInterface>,
-                         Terminator]> {
+                         Terminator,
+                         TokenConsumerTrait]> {
   let arguments = (ins
                    OptionalAttr<TypeAttrOf<LLVM_FunctionType>>:$var_callee_type,
                    OptionalAttr<FlatSymbolRefAttr>:$callee,
@@ -790,7 +791,19 @@ def LLVM_InvokeOp
       "Block*":$unwind, "ValueRange":$unwindOps)>,
     OpBuilder<(ins "LLVMFunctionType":$calleeType, "FlatSymbolRefAttr":$callee,
       "ValueRange":$ops, "Block*":$normal, "ValueRange":$normalOps,
-      "Block*":$unwind, "ValueRange":$unwindOps)>];
+      "Block*":$unwind, "ValueRange":$unwindOps)>,
+    OpBuilder<(ins "TypeRange":$resultTypes, "FlatSymbolRefAttr":$callee,
+                   "ValueRange":$args, "Block *":$normalDest, "Block *":$unwindDest,
+                   "ArrayRef<ValueRange>":$op_bundle_operands,
+                   "ArrayAttr":$op_bundle_tags), [{
+      build($_builder, $_state, resultTypes, /*var_callee_type=*/nullptr,
+            callee, args, /*arg_attrs=*/nullptr, /*res_attrs=*/nullptr,
+            /*normalDestOperands=*/ValueRange{},
+            /*unwindDestOperands=*/ValueRange{},
+            /*branch_weights=*/nullptr, /*CConv=*/nullptr,
+            /*default_func_attrs=*/nullptr, /*uniform_work_group_size=*/nullptr,
+            op_bundle_operands, op_bundle_tags, normalDest, unwindDest);
+    }]>];
   let hasCustomAssemblyFormat = 1;
   let hasVerifier = 1;
   let extraClassDeclaration = [{
@@ -810,6 +823,34 @@ def LLVM_LandingpadOp : LLVM_Op<"landingpad"> {
   let builders = [LLVM_OneResultOpBuilder];
   let hasCustomAssemblyFormat = 1;
   let hasVerifier = 1;
+}
+
+def LLVM_CleanupPadOp : LLVM_Op<"cleanuppad"> {
+  let summary = "LLVM cleanuppad instruction";
+  let arguments = (ins Token:$parentPad, Variadic<LLVM_Type>:$args);
+  let results = (outs Token:$res);
+  let assemblyFormat = [{
+    `within` $parentPad (`[` $args^ `:` type($args) `]`)? attr-dict
+  }];
+}
+
+def LLVM_CleanupRetOp : LLVM_TerminatorOp<"cleanupret"> {
+  let summary = "LLVM cleanupret instruction";
+  let arguments = (ins Token:$cleanupPad);
+  let successors = (successor VariadicSuccessor<AnySuccessor>:$unwindDest);
+  let builders = [
+    OpBuilder<(ins "Value":$cleanupPad, CArg<"Block *", "nullptr">:$unwindDest), [{
+      build($_builder, $_state, cleanupPad,
+            unwindDest ? BlockRange(unwindDest) : BlockRange());
+    }]>
+  ];
+  let hasCustomAssemblyFormat = 1;
+  let extraClassDeclaration = [{
+    bool hasUnwindDest() { return !getUnwindDest().empty(); }
+    Block *getUnwindDestBlock() {
+      return hasUnwindDest() ? getUnwindDest().front() : nullptr;
+    }
+  }];
 }
 
 //===----------------------------------------------------------------------===//
@@ -841,7 +882,8 @@ def LLVM_CallOp
           "call", [AttrSizedOperandSegments,
                    DeclareOpInterfaceMethods<FastmathFlagsInterface>,
                    DeclareOpInterfaceMethods<CallOpInterface>,
-                   DeclareOpInterfaceMethods<SymbolUserOpInterface>]> {
+                   DeclareOpInterfaceMethods<SymbolUserOpInterface>,
+                   TokenConsumerTrait]> {
   let summary = "Call to an LLVM function.";
   let description = [{
     In LLVM IR, functions may return either 0 or 1 value. LLVM IR dialect
@@ -930,7 +972,29 @@ def LLVM_CallOp
     OpBuilder<(ins "LLVMFunctionType":$calleeType, "FlatSymbolRefAttr":$callee,
                    CArg<"ValueRange", "{}">:$args)>,
     OpBuilder<(ins "LLVMFunctionType":$calleeType, "StringRef":$callee,
-                   CArg<"ValueRange", "{}">:$args)>
+                   CArg<"ValueRange", "{}">:$args)>,
+    OpBuilder<(ins "TypeRange":$resultTypes, "FlatSymbolRefAttr":$callee,
+                   "ValueRange":$args, "ArrayRef<ValueRange>":$op_bundle_operands,
+                   "ArrayAttr":$op_bundle_tags), [{
+      build($_builder, $_state, resultTypes, /*var_callee_type=*/nullptr,
+            callee, args, /*fastmathFlags=*/nullptr, /*CConv=*/nullptr,
+            /*TailCallKind=*/nullptr, /*memory_effects=*/nullptr,
+            /*convergent=*/nullptr, /*no_unwind=*/nullptr, /*will_return=*/nullptr,
+            /*noreturn=*/nullptr, /*returns_twice=*/nullptr, /*hot=*/nullptr,
+            /*cold=*/nullptr, /*noduplicate=*/nullptr,
+            /*no_caller_saved_registers=*/nullptr, /*nocallback=*/nullptr,
+            /*modular_format=*/nullptr, /*nobuiltins=*/nullptr,
+            /*allocsize=*/nullptr, /*optsize=*/nullptr, /*minsize=*/nullptr,
+            /*builtin=*/nullptr, /*nobuiltin=*/nullptr,
+            /*save_reg_params=*/nullptr, /*zero_call_used_regs=*/nullptr,
+            /*trap_func_name=*/nullptr, /*default_func_attrs=*/nullptr,
+            /*uniform_work_group_size=*/nullptr, op_bundle_operands,
+            op_bundle_tags, /*arg_attrs=*/nullptr, /*res_attrs=*/nullptr,
+            /*no_inline=*/nullptr, /*always_inline=*/nullptr,
+            /*inline_hint=*/nullptr, /*access_groups=*/nullptr,
+            /*alias_scopes=*/nullptr, /*noalias_scopes=*/nullptr,
+            /*tbaa=*/nullptr);
+    }]>
   ];
   let hasVerifier = 1;
   let hasCustomAssemblyFormat = 1;

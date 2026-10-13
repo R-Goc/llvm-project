@@ -1713,10 +1713,10 @@ LogicalResult InvokeOp::verify() {
   if (unwindDest->empty())
     return emitError("must have at least one operation in unwind destination");
 
-  // In unwind destination, first operation must be LandingpadOp
-  if (!isa<LandingpadOp>(unwindDest->front()))
+  // In unwind destination, first operation must be LandingpadOp or funclet pad.
+  if (!isa<LandingpadOp, CleanupPadOp, NoneTokenOp>(unwindDest->front()))
     return emitError("first operation in unwind destination should be a "
-                     "llvm.landingpad operation");
+                     "llvm.landingpad or funclet pad operation");
 
   if (failed(verifyOperandBundles(*this)))
     return failure();
@@ -1966,6 +1966,35 @@ ParseResult LandingpadOp::parse(OpAsmParser &parser, OperationState &result) {
     return failure();
 
   result.addTypes(type);
+  return success();
+}
+
+//===----------------------------------------------------------------------===//
+// CleanupRetOp
+//===----------------------------------------------------------------------===//
+
+void CleanupRetOp::print(OpAsmPrinter &p) {
+  p << ' ' << getCleanupPad();
+  if (hasUnwindDest())
+    p << " unwind " << getUnwindDest().front();
+  p.printOptionalAttrDict((*this)->getAttrs());
+}
+
+ParseResult CleanupRetOp::parse(OpAsmParser &parser, OperationState &result) {
+  OpAsmParser::UnresolvedOperand cleanupPad;
+  if (parser.parseOperand(cleanupPad))
+    return failure();
+  Type tokenType = parser.getBuilder().getType<TokenType>();
+  if (parser.resolveOperand(cleanupPad, tokenType, result.operands))
+    return failure();
+  if (succeeded(parser.parseOptionalKeyword("unwind"))) {
+    Block *unwindDest = nullptr;
+    if (parser.parseSuccessor(unwindDest))
+      return failure();
+    result.addSuccessors(unwindDest);
+  }
+  if (parser.parseOptionalAttrDict(result.attributes))
+    return failure();
   return success();
 }
 
