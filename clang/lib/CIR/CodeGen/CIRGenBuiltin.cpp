@@ -3123,8 +3123,15 @@ RValue CIRGenFunction::emitBuiltinExpr(const GlobalDecl &gd, unsigned builtinID,
   case Builtin::BI__builtin_ptrauth_sign_unauthenticated:
   case Builtin::BI__builtin_ptrauth_strip:
   case Builtin::BI__builtin_get_vtable_pointer:
+    return errorBuiltinNYI(*this, e, builtinID);
   case Builtin::BI__exception_code:
-  case Builtin::BI_exception_code:
+  case Builtin::BI_exception_code: {
+    mlir::Location loc = getLoc(e->getSourceRange());
+    if (sehCodeSlotStack.empty()) {
+      return RValue::get(builder.getSInt32(0, loc));
+    }
+    return RValue::get(builder.createLoad(loc, sehCodeSlotStack.back()));
+  }
   case Builtin::BI__exception_info:
   case Builtin::BI_exception_info:
   case Builtin::BI__abnormal_termination:

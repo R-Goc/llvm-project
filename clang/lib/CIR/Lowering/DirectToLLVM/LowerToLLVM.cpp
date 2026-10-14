@@ -5084,8 +5084,20 @@ public:
     if (!arg2)
       arg2 = mlir::LLVM::ZeroOp::create(rewriter, loc, llvmPtrTy);
 
-    auto catchPad = mlir::LLVM::CatchPadOp::create(
-        rewriter, loc, csToken, mlir::ValueRange{arg0, arg1, arg2});
+    auto func = op->getParentOfType<mlir::LLVM::LLVMFuncOp>();
+    auto cirFunc = op->getParentOfType<cir::FuncOp>();
+    bool isSEH = (func && func.getPersonality() &&
+                  (func.getPersonality()->contains("C_specific_handler") ||
+                   func.getPersonality()->contains("except_handler"))) ||
+                 (cirFunc && cirFunc.getPersonality() &&
+                  (cirFunc.getPersonality()->contains("C_specific_handler") ||
+                   cirFunc.getPersonality()->contains("except_handler")));
+
+    auto catchPad =
+        isSEH ? mlir::LLVM::CatchPadOp::create(rewriter, loc, csToken,
+                                               mlir::ValueRange{arg0})
+              : mlir::LLVM::CatchPadOp::create(
+                    rewriter, loc, csToken, mlir::ValueRange{arg0, arg1, arg2});
     mlir::Value cpToken = catchPad.getResult();
 
     currentMSVCEHState.catchPadTokens.insert(cpToken);

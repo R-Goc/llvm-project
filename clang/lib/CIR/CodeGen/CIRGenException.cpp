@@ -709,8 +709,119 @@ mlir::LogicalResult CIRGenFunction::emitCXXTryStmt(const CXXTryStmt &s) {
   return emitCXXTryStmt(s, emitter);
 }
 
+mlir::LogicalResult CIRGenFunction::emitSEHTryStmt(const SEHTryStmt &s) {
+  if (s.getFinallyHandler()) {
+    cgm.errorNYI(s.getSourceRange(), "emitSEHTryStmt with __finally");
+    return mlir::failure();
+  }
+
+  const SEHExceptStmt *exceptStmt = s.getExceptHandler();
+  if (!exceptStmt) {
+    cgm.errorNYI(s.getSourceRange(), "emitSEHTryStmt without __except");
+    return mlir::failure();
+  }
+
+  // Set personality function for SEH if not already set.
+  auto funcOp = mlir::cast<cir::FuncOp>(curFn);
+  if (!funcOp.getPersonality())
+    funcOp.setPersonality(getPersonalityFn(cgm, getEHPersonality(*this)));
+
+  mlir::Location tryLoc = getLoc(s.getBeginLoc());
+
+  // Allocate a 32-bit int slot for __exception_code.
+  Address codeSlotAddr =
+      createMemTempWithoutCast(getContext().IntTy, tryLoc, "__exception_code");
+  mlir::Value codeSlot = codeSlotAddr.getPointer();
+  sehCodeSlotStack.push_back(codeSlot);
+
+  SmallVector<mlir::Attribute> handlerAttrs;
+  mlir::LogicalResult tryRes = mlir::success();
+
+  auto tryOp = cir::TryOp::create(
+      builder, tryLoc,
+      /*tryBuilder=*/
+      [&](mlir::OpBuilder &b, mlir::Location loc) {
+        mlir::Region *tryRegion = builder.getBlock()->getParent();
+        mlir::Block *tryEntryBlock = builder.getBlock();
+        mlir::Block *tryExitBlock = builder.createBlock(tryRegion);
+        builder.setInsertionPointToEnd(tryEntryBlock);
+
+        sehTryEpilogueStack.push_back(tryExitBlock);
+
+        RunCleanupsScope tryBodyCleanups(*this);
+        if (emitStmt(s.getTryBlock(), /*useCurrentScope=*/true).failed())
+          tryRes = mlir::failure();
+        tryBodyCleanups.forceCleanup();
+
+        if (!builder.getBlock()->mightHaveTerminator() ||
+            !builder.getBlock()->getTerminator()) {
+          cir::BrOp::create(builder, loc, tryExitBlock);
+        }
+
+        builder.setInsertionPointToEnd(tryExitBlock);
+        if (!tryExitBlock->mightHaveTerminator() ||
+            !tryExitBlock->getTerminator()) {
+          cir::YieldOp::create(builder, loc);
+        }
+
+        sehTryEpilogueStack.pop_back();
+      },
+      /*handlersBuilder=*/
+      [&](mlir::OpBuilder &b, mlir::Location loc,
+          mlir::OperationState &result) {
+        mlir::OpBuilder::InsertionGuard guard(b);
+        mlir::Type ehTokenTy = cir::EhTokenType::get(&getMLIRContext());
+        mlir::Region *region = result.addRegion();
+        builder.createBlock(region, /*insertPt=*/{}, {ehTokenTy}, {loc});
+        handlerAttrs.push_back(cir::CatchAllAttr::get(&getMLIRContext()));
+      });
+
+  if (tryRes.failed()) {
+    sehCodeSlotStack.pop_back();
+    return mlir::failure();
+  }
+
+  tryOp.setHandlerTypesAttr(
+      mlir::ArrayAttr::get(&getMLIRContext(), handlerAttrs));
+
+  // Emit the __except handler body.
+  mlir::Region *handler = &tryOp.getHandlerRegions()[0];
+  mlir::Location handlerLoc = getLoc(exceptStmt->getExceptLoc());
+
+  {
+    mlir::OpBuilder::InsertionGuard guard(builder);
+    builder.setInsertionPointToStart(&handler->front());
+
+    mlir::Value ehToken = handler->front().getArgument(0);
+
+    RunCleanupsScope handlerScope(*this);
+    callBeginCatch(*this, ehToken, builder.getVoidPtrTy(),
+                   /*paramAddr=*/{}, /*typeInfo=*/{}, /*flags=*/0);
+
+    if (emitStmt(exceptStmt->getBlock(), /*useCurrentScope=*/true).failed()) {
+      sehCodeSlotStack.pop_back();
+      return mlir::failure();
+    }
+
+    handlerScope.forceCleanup();
+
+    mlir::Block *block = &handler->getBlocks().back();
+    if (block->empty() ||
+        !block->back().hasTrait<mlir::OpTrait::IsTerminator>()) {
+      mlir::OpBuilder::InsertionGuard guard(builder);
+      builder.setInsertionPointToEnd(block);
+      builder.createYield(handlerLoc);
+    }
+  }
+
+  sehCodeSlotStack.pop_back();
+  return mlir::success();
+}
+
 bool CIRGenFunction::currentFunctionUsesSEHTry() const {
   const Decl *d = curGD.getDecl();
+  if (!d)
+    d = curCodeDecl;
   if (const auto *fd = dyn_cast_or_null<FunctionDecl>(d))
     return fd->usesSEHTry();
   return false;
@@ -732,8 +843,6 @@ bool CIRGenFunction::isCatchOrCleanupRequired() {
       return false;
     if (!currentFunctionUsesSEHTry())
       return false;
-    cgm.errorNYI("isInvokeDest: SEH try with exceptions disabled");
-    return false;
   }
 
   // CUDA device code doesn't have exceptions.
