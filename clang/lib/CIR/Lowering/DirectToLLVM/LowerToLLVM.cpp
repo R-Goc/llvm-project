@@ -726,6 +726,14 @@ convertFastMathFlags(cir::FastMathFlags cirFlags) {
   return llvmFlags;
 }
 
+void createLLVMFuncOpIfNotExist(mlir::ConversionPatternRewriter &rewriter,
+                                mlir::SymbolTableCollection &symbolTables,
+                                mlir::Operation *srcOp, llvm::StringRef fnName,
+                                mlir::Type fnTy,
+                                mlir::ArrayAttr argAttrs,
+                                mlir::ArrayAttr resAttrs,
+                                mlir::LLVM::cconv::CConv *cconv);
+
 mlir::LogicalResult CIRToLLVMLLVMIntrinsicCallOpLowering::matchAndRewrite(
     cir::LLVMIntrinsicCallOp op, OpAdaptor adaptor,
     mlir::ConversionPatternRewriter &rewriter) const {
@@ -738,6 +746,18 @@ mlir::LogicalResult CIRToLLVMLLVMIntrinsicCallOpLowering::matchAndRewrite(
       return op.emitError("expected LLVM result type");
   }
   StringRef name = op.getIntrinsicName();
+  if (name == "eh.exceptioncode") {
+    auto tokenTy = adaptor.getOperands()[0].getType();
+    auto fnTy = mlir::LLVM::LLVMFunctionType::get(llvmResTy, {tokenTy});
+    createLLVMFuncOpIfNotExist(rewriter, symbolTables, op,
+                               "llvm.eh.exceptioncode", fnTy, nullptr, nullptr,
+                               nullptr);
+    rewriter.replaceOpWithNewOp<mlir::LLVM::CallOp>(
+        op, mlir::TypeRange{llvmResTy}, "llvm.eh.exceptioncode",
+        adaptor.getOperands());
+    return mlir::success();
+  }
+
   mlir::LLVM::FastmathFlags fastmathFlags = {};
   if (std::optional<cir::FastMathFlags> fastmath = op.getFastmathFlags())
     fastmathFlags = convertFastMathFlags(*fastmath);

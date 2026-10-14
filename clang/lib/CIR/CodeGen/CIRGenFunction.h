@@ -1279,6 +1279,7 @@ public:
   SmallVector<Address, 4> sehFinallyAbnormalSlotStack;
   SmallVector<std::pair<const VarDecl *, Address>, 8> escapedLocals;
   bool isOutlinedSEHHelper = false;
+  mlir::Value sehInfo;
 
   /// Takes the old cleanup stack size and emits the cleanup blocks
   /// that have been added.
@@ -2252,6 +2253,9 @@ public:
   cir::FuncOp
   GenerateSEHFinallyFunction(CIRGenFunction &parentCGF,
                              const clang::SEHFinallyStmt &finally);
+  cir::FuncOp
+  GenerateSEHFilterFunction(CIRGenFunction &parentCGF,
+                            const clang::SEHExceptStmt &except);
 
   void emitCtorPrologue(const clang::CXXConstructorDecl *ctor,
                         clang::CXXCtorType ctorType, FunctionArgList &args);

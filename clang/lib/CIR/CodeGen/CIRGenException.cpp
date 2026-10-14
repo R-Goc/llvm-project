@@ -297,11 +297,10 @@ struct CallEndCatch final : EHScopeStack::Cleanup {
 };
 } // namespace
 
-static mlir::Value callBeginCatch(CIRGenFunction &cgf, mlir::Value ehToken,
-                                  mlir::Type exnPtrTy,
-                                  mlir::Value paramAddr = {},
-                                  cir::GlobalViewAttr typeInfo = {},
-                                  std::optional<uint32_t> flags = std::nullopt) {
+static cir::BeginCatchOp
+callBeginCatch(CIRGenFunction &cgf, mlir::Value ehToken, mlir::Type exnPtrTy,
+               mlir::Value paramAddr = {}, cir::GlobalViewAttr typeInfo = {},
+               std::optional<uint32_t> flags = std::nullopt) {
   auto catchTokenTy = cir::CatchTokenType::get(cgf.getBuilder().getContext());
   mlir::IntegerAttr flagsAttr;
   if (flags)
@@ -317,7 +316,7 @@ static mlir::Value callBeginCatch(CIRGenFunction &cgf, mlir::Value ehToken,
   cgf.ehStack.pushCleanup<CallEndCatch>(cleanupKind,
                                         beginCatch.getCatchToken());
 
-  return beginCatch.getExnPtr();
+  return beginCatch;
 }
 
 /// Get or create the catch-init copy thunk for \p catchParam.
@@ -484,7 +483,8 @@ static void initCatchParam(CIRGenFunction &cgf, CIRGenBuilderTy &builder,
     flags = typeInfo.flags;
   }
   mlir::Value exnPtr = callBeginCatch(cgf, ehToken, builder.getVoidPtrTy(),
-                                      param, typeAttr, flags);
+                                      param, typeAttr, flags)
+                           .getExnPtr();
   cir::InitCatchParamOp::create(builder, mloc, exnPtr, paramAddr.getPointer(),
                                 kind);
   cgf.emitAutoVarCleanups(var);
@@ -711,6 +711,72 @@ mlir::LogicalResult CIRGenFunction::emitCXXTryStmt(const CXXTryStmt &s) {
   return emitCXXTryStmt(s, emitter);
 }
 
+namespace {
+struct SEHCaptureFinder : public ConstStmtVisitor<SEHCaptureFinder> {
+  SmallVector<const VarDecl *, 4> captures;
+  llvm::SmallPtrSet<const VarDecl *, 4> visited;
+
+  void Visit(const Stmt *s) {
+    if (!s)
+      return;
+    ConstStmtVisitor<SEHCaptureFinder>::Visit(s);
+    for (const Stmt *child : s->children())
+      if (child)
+        Visit(child);
+  }
+
+  void VisitDeclRefExpr(const DeclRefExpr *e) {
+    if (const auto *vd = dyn_cast<VarDecl>(e->getDecl())) {
+      if (vd->isLocalVarDeclOrParm() && vd->hasLocalStorage()) {
+        if (visited.insert(vd).second)
+          captures.push_back(vd);
+      }
+    }
+  }
+};
+
+static void recoverCapturedLocals(CIRGenFunction &subCgf,
+                                  CIRGenFunction &parentCGF,
+                                  const SEHCaptureFinder &finder,
+                                  mlir::Value framePtrArg, mlir::Location loc) {
+  CIRGenBuilderTy &builder = subCgf.getBuilder();
+  for (const VarDecl *vd : finder.captures) {
+    auto it = parentCGF.localDeclMap.find(vd);
+    if (it == parentCGF.localDeclMap.end())
+      continue;
+    Address parentAlloca = it->second;
+
+    int idx = -1;
+    for (size_t i = 0; i < parentCGF.escapedLocals.size(); ++i) {
+      if (parentCGF.escapedLocals[i].first == vd) {
+        idx = static_cast<int>(i);
+        break;
+      }
+    }
+    if (idx == -1) {
+      idx = static_cast<int>(parentCGF.escapedLocals.size());
+      parentCGF.escapedLocals.push_back({vd, parentAlloca});
+    }
+
+    auto parentFn = mlir::cast<cir::FuncOp>(parentCGF.curFn);
+    auto parentSym = mlir::FlatSymbolRefAttr::get(parentFn.getSymNameAttr());
+    auto gvAttr = cir::GlobalViewAttr::get(builder.getVoidPtrTy(), parentSym);
+    auto parentPtr = cir::ConstantOp::create(builder, loc,
+                                             builder.getVoidPtrTy(), gvAttr);
+    auto idxVal = builder.getSInt32(idx, loc);
+    auto recoveredVoidPtr = cir::LLVMIntrinsicCallOp::create(
+        builder, loc, builder.getStringAttr("localrecover"),
+        builder.getVoidPtrTy(),
+        mlir::ValueRange{parentPtr, framePtrArg, idxVal});
+    auto typedRecoveredPtr = builder.createBitcast(
+        loc, recoveredVoidPtr.getResult(), parentAlloca.getPointer().getType());
+    subCgf.setAddrOfLocalVar(
+        vd, Address(typedRecoveredPtr, parentAlloca.getElementType(),
+                    parentAlloca.getAlignment()));
+  }
+}
+} // namespace
+
 cir::FuncOp CIRGenFunction::GenerateSEHFinallyFunction(
     CIRGenFunction &parentCGF, const clang::SEHFinallyStmt &finally) {
   mlir::OpBuilder::InsertionGuard guard(builder);
@@ -757,66 +823,9 @@ cir::FuncOp CIRGenFunction::GenerateSEHFinallyFunction(
   CIRGenFunction::LexicalScope helperScope(subCgf, loc, entry);
   SymTableScopeTy varScope(subCgf.symbolTable);
 
-  struct FinallyCaptureFinder : public ConstStmtVisitor<FinallyCaptureFinder> {
-    SmallVector<const VarDecl *, 4> captures;
-    llvm::SmallPtrSet<const VarDecl *, 4> visited;
-
-    void Visit(const Stmt *s) {
-      if (!s)
-        return;
-      ConstStmtVisitor<FinallyCaptureFinder>::Visit(s);
-      for (const Stmt *child : s->children())
-        if (child)
-          Visit(child);
-    }
-
-    void VisitDeclRefExpr(const DeclRefExpr *e) {
-      if (const auto *vd = dyn_cast<VarDecl>(e->getDecl())) {
-        if (vd->isLocalVarDeclOrParm() && vd->hasLocalStorage()) {
-          if (visited.insert(vd).second)
-            captures.push_back(vd);
-        }
-      }
-    }
-  };
-
-  FinallyCaptureFinder finder;
+  SEHCaptureFinder finder;
   finder.Visit(finally.getBlock());
-
-  for (const VarDecl *vd : finder.captures) {
-    auto it = parentCGF.localDeclMap.find(vd);
-    if (it == parentCGF.localDeclMap.end())
-      continue;
-    Address parentAlloca = it->second;
-
-    int idx = -1;
-    for (size_t i = 0; i < parentCGF.escapedLocals.size(); ++i) {
-      if (parentCGF.escapedLocals[i].first == vd) {
-        idx = static_cast<int>(i);
-        break;
-      }
-    }
-    if (idx == -1) {
-      idx = static_cast<int>(parentCGF.escapedLocals.size());
-      parentCGF.escapedLocals.push_back({vd, parentAlloca});
-    }
-
-    auto parentFn = mlir::cast<cir::FuncOp>(parentCGF.curFn);
-    auto parentSym = mlir::FlatSymbolRefAttr::get(parentFn.getSymNameAttr());
-    auto gvAttr = cir::GlobalViewAttr::get(builder.getVoidPtrTy(), parentSym);
-    auto parentPtr = cir::ConstantOp::create(builder, loc,
-                                             builder.getVoidPtrTy(), gvAttr);
-    auto idxVal = builder.getSInt32(idx, loc);
-    auto recoveredVoidPtr = cir::LLVMIntrinsicCallOp::create(
-        builder, loc, builder.getStringAttr("localrecover"),
-        builder.getVoidPtrTy(),
-        mlir::ValueRange{parentPtr, framePtrArg, idxVal});
-    auto typedRecoveredPtr = builder.createBitcast(
-        loc, recoveredVoidPtr.getResult(), parentAlloca.getPointer().getType());
-    subCgf.setAddrOfLocalVar(
-        vd, Address(typedRecoveredPtr, parentAlloca.getElementType(),
-                    parentAlloca.getAlignment()));
-  }
+  recoverCapturedLocals(subCgf, parentCGF, finder, framePtrArg, loc);
 
   (void)subCgf.emitStmt(finally.getBlock(), /*useCurrentScope=*/true);
 
@@ -825,6 +834,93 @@ cir::FuncOp CIRGenFunction::GenerateSEHFinallyFunction(
       (!curBlock->mightHaveTerminator() || !curBlock->getTerminator())) {
     cir::ReturnOp::create(builder, loc);
   }
+
+  return fn;
+}
+
+cir::FuncOp CIRGenFunction::GenerateSEHFilterFunction(
+    CIRGenFunction &parentCGF, const clang::SEHExceptStmt &except) {
+  mlir::OpBuilder::InsertionGuard guard(builder);
+
+  SmallString<128> name;
+  {
+    llvm::raw_svector_ostream os(name);
+    GlobalDecl parentSEHFn = parentCGF.curSEHParent;
+    if (!parentSEHFn) {
+      parentSEHFn = parentCGF.curGD;
+      parentCGF.curSEHParent = parentSEHFn;
+    }
+    assert(parentSEHFn && "No CurSEHParent!");
+    MangleContext &mangler = cgm.getCXXABI().getMangleContext();
+    mangler.mangleSEHFilterExpression(parentSEHFn, os);
+  }
+
+  mlir::Location loc = getLoc(except.getBeginLoc());
+  cir::FuncType fnType;
+  if (cgm.getTarget().getTriple().getArch() != llvm::Triple::x86) {
+    fnType = cir::FuncType::get(
+        {builder.getVoidPtrTy(), builder.getVoidPtrTy()},
+        builder.getSInt32Ty());
+  } else {
+    fnType = cir::FuncType::get({}, builder.getSInt32Ty());
+  }
+
+  builder.setInsertionPoint(parentCGF.curFn);
+  cir::FuncOp fn = cir::FuncOp::create(builder, loc, name, fnType);
+  fn.setLinkage(cir::GlobalLinkageKind::InternalLinkage);
+  fn.setSymVisibility("private");
+  fn->setAttr(cir::CIRDialect::getNoThrowAttrName(), builder.getUnitAttr());
+  fn->setAttr(cir::CIRDialect::getNoUnwindAttrName(), builder.getUnitAttr());
+  cgm.insertGlobalSymbol(fn);
+
+  mlir::Block *entry = fn.addEntryBlock();
+
+  CIRGenFunction subCgf(cgm, builder, /*suppressNewContext=*/true);
+  subCgf.curFn = fn;
+  subCgf.isOutlinedSEHHelper = true;
+  subCgf.curSEHParent = parentCGF.curSEHParent;
+  subCgf.curCodeDecl = parentCGF.curCodeDecl;
+
+  builder.setInsertionPointToStart(entry);
+
+  const Expr *filterExpr = except.getFilterExpr();
+  CIRGenFunction::SourceLocRAIIObject helperLoc(subCgf,
+                                                filterExpr->getSourceRange());
+  CIRGenFunction::LexicalScope helperScope(subCgf, loc, entry);
+  SymTableScopeTy varScope(subCgf.symbolTable);
+
+  SEHCaptureFinder finder;
+  finder.Visit(filterExpr);
+
+  if (cgm.getTarget().getTriple().getArch() != llvm::Triple::x86) {
+    mlir::Value exnPointers = entry->getArgument(0);
+    mlir::Value framePtrArg = entry->getArgument(1);
+    subCgf.sehInfo = exnPointers;
+    recoverCapturedLocals(subCgf, parentCGF, finder, framePtrArg, loc);
+
+    Address codeSlot = subCgf.createTempAlloca(
+        builder.getSInt32Ty(), CharUnits::fromQuantity(4), loc,
+        "__exception_code");
+    subCgf.sehCodeSlotStack.push_back(codeSlot.getPointer());
+
+    auto voidPtrPtrTy = builder.getPointerTo(builder.getVoidPtrTy());
+    mlir::Value bitcastedExnPointers =
+        builder.createBitcast(loc, exnPointers, voidPtrPtrTy);
+    mlir::Value recPtr =
+        builder.createLoad(loc, bitcastedExnPointers).getResult();
+    auto s32PtrTy = builder.getPointerTo(builder.getSInt32Ty());
+    mlir::Value bitcastedRecPtr = builder.createBitcast(loc, recPtr, s32PtrTy);
+    mlir::Value code = builder.createLoad(loc, bitcastedRecPtr).getResult();
+    builder.createStore(loc, code, codeSlot);
+  }
+
+  mlir::Value filterVal = subCgf.emitScalarExpr(filterExpr);
+  mlir::Value intVal =
+      builder.createBoolIntToIntCast(filterVal, builder.getSInt32Ty());
+  cir::ReturnOp::create(builder, loc, intVal);
+
+  if (!subCgf.sehCodeSlotStack.empty())
+    subCgf.sehCodeSlotStack.pop_back();
 
   return fn;
 }
@@ -923,6 +1019,22 @@ mlir::LogicalResult CIRGenFunction::emitSEHTryStmt(const SEHTryStmt &s) {
   mlir::Value codeSlot = codeSlotAddr.getPointer();
   sehCodeSlotStack.push_back(codeSlot);
 
+  bool isConstantOne = false;
+  if (cgm.getTarget().getTriple().getArch() != llvm::Triple::x86) {
+    Expr::EvalResult eval;
+    if (exceptStmt->getFilterExpr()->EvaluateAsInt(eval, getContext())) {
+      if (eval.Val.isInt() && eval.Val.getInt() == 1)
+        isConstantOne = true;
+    }
+  }
+
+  cir::FuncOp filterFn;
+  cir::GlobalViewAttr filterAttr;
+  if (!isConstantOne) {
+    filterFn = GenerateSEHFilterFunction(*this, *exceptStmt);
+    filterAttr = builder.getGlobalViewAttr(builder.getVoidPtrTy(), filterFn);
+  }
+
   SmallVector<mlir::Attribute> handlerAttrs;
   mlir::LogicalResult tryRes = mlir::success();
 
@@ -984,8 +1096,20 @@ mlir::LogicalResult CIRGenFunction::emitSEHTryStmt(const SEHTryStmt &s) {
     mlir::Value ehToken = handler->front().getArgument(0);
 
     RunCleanupsScope handlerScope(*this);
-    callBeginCatch(*this, ehToken, builder.getVoidPtrTy(),
-                   /*paramAddr=*/{}, /*typeInfo=*/{}, /*flags=*/0);
+    cir::BeginCatchOp beginCatch =
+        isConstantOne
+            ? callBeginCatch(*this, ehToken, builder.getVoidPtrTy(),
+                             /*paramAddr=*/{}, /*typeInfo=*/{}, /*flags=*/0)
+            : callBeginCatch(*this, ehToken, builder.getVoidPtrTy(),
+                             /*paramAddr=*/{}, filterAttr, /*flags=*/0);
+
+    if (cgm.getTarget().getTriple().getArch() != llvm::Triple::x86) {
+      auto exnCode = cir::LLVMIntrinsicCallOp::create(
+          builder, handlerLoc, builder.getStringAttr("eh.exceptioncode"),
+          builder.getSInt32Ty(),
+          mlir::ValueRange{beginCatch.getCatchToken()});
+      builder.createStore(handlerLoc, exnCode.getResult(), codeSlotAddr);
+    }
 
     if (emitStmt(exceptStmt->getBlock(), /*useCurrentScope=*/true).failed()) {
       sehCodeSlotStack.pop_back();

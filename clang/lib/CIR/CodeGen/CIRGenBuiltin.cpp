@@ -3127,14 +3127,22 @@ RValue CIRGenFunction::emitBuiltinExpr(const GlobalDecl &gd, unsigned builtinID,
   case Builtin::BI__exception_code:
   case Builtin::BI_exception_code: {
     mlir::Location loc = getLoc(e->getSourceRange());
+    mlir::Type resTy = convertType(e->getType());
     if (sehCodeSlotStack.empty()) {
-      return RValue::get(builder.getSInt32(0, loc));
+      return RValue::get(builder.getConstInt(loc, resTy, 0));
     }
-    return RValue::get(builder.createLoad(loc, sehCodeSlotStack.back()));
+    mlir::Value val = builder.createLoad(loc, sehCodeSlotStack.back());
+    if (val.getType() != resTy)
+      val = builder.createIntCast(val, resTy);
+    return RValue::get(val);
   }
   case Builtin::BI__exception_info:
-  case Builtin::BI_exception_info:
-    return errorBuiltinNYI(*this, e, builtinID);
+  case Builtin::BI_exception_info: {
+    mlir::Location loc = getLoc(e->getSourceRange());
+    if (sehInfo)
+      return RValue::get(sehInfo);
+    return RValue::get(builder.getNullPtr(builder.getVoidPtrTy(), loc));
+  }
   case Builtin::BI__abnormal_termination:
   case Builtin::BI_abnormal_termination: {
     mlir::Location loc = getLoc(e->getSourceRange());
