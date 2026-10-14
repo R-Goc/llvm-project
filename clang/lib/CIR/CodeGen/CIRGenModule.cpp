@@ -237,6 +237,11 @@ CIRGenModule::CIRGenModule(mlir::MLIRContext &mlirContext,
                                                 /*line=*/0,
                                                 /*column=*/0));
   }
+
+  for (const auto &lib : codeGenOpts.DependentLibraries)
+    addDependentLib(lib);
+  for (const auto &opt : codeGenOpts.LinkerOptions)
+    appendLinkerOptions(opt);
 }
 
 CIRGenModule::~CIRGenModule() = default;
@@ -2771,7 +2776,7 @@ void CIRGenModule::addDependentLib(StringRef lib) {
     if (quote)
       opt += "\"";
     opt += lib;
-    if (!lib.ends_with(".lib"))
+    if (!lib.ends_with_insensitive(".lib") && !lib.ends_with_insensitive(".a"))
       opt += ".lib";
     if (quote)
       opt += "\"";
