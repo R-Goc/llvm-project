@@ -3134,9 +3134,19 @@ RValue CIRGenFunction::emitBuiltinExpr(const GlobalDecl &gd, unsigned builtinID,
   }
   case Builtin::BI__exception_info:
   case Builtin::BI_exception_info:
-  case Builtin::BI__abnormal_termination:
-  case Builtin::BI_abnormal_termination:
     return errorBuiltinNYI(*this, e, builtinID);
+  case Builtin::BI__abnormal_termination:
+  case Builtin::BI_abnormal_termination: {
+    mlir::Location loc = getLoc(e->getSourceRange());
+    if (isOutlinedSEHHelper) {
+      auto funcOp = mlir::cast<cir::FuncOp>(curFn);
+      mlir::Value arg0 = funcOp.getArgument(0);
+      mlir::Type s32Ty = builder.getSInt32Ty();
+      mlir::Value castVal = builder.createIntCast(arg0, s32Ty);
+      return RValue::get(castVal);
+    }
+    return RValue::get(builder.getSInt32(0, loc));
+  }
   case Builtin::BI_setjmpex:
   case Builtin::BI_setjmp:
     if (getTarget().getTriple().isOSMSVCRT()) {

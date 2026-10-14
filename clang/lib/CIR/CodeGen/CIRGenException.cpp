@@ -15,6 +15,8 @@
 #include "mlir/IR/Block.h"
 #include "mlir/IR/Location.h"
 
+#include "clang/AST/Mangle.h"
+#include "clang/AST/StmtVisitor.h"
 #include "clang/Basic/DiagnosticSema.h"
 #include "clang/CIR/MissingFeatures.h"
 #include "llvm/Support/SaveAndRestore.h"
@@ -709,10 +711,197 @@ mlir::LogicalResult CIRGenFunction::emitCXXTryStmt(const CXXTryStmt &s) {
   return emitCXXTryStmt(s, emitter);
 }
 
+cir::FuncOp CIRGenFunction::GenerateSEHFinallyFunction(
+    CIRGenFunction &parentCGF, const clang::SEHFinallyStmt &finally) {
+  mlir::OpBuilder::InsertionGuard guard(builder);
+
+  SmallString<128> name;
+  {
+    llvm::raw_svector_ostream os(name);
+    GlobalDecl parentSEHFn = parentCGF.curSEHParent;
+    if (!parentSEHFn) {
+      parentSEHFn = parentCGF.curGD;
+      parentCGF.curSEHParent = parentSEHFn;
+    }
+    assert(parentSEHFn && "No CurSEHParent!");
+    MangleContext &mangler = cgm.getCXXABI().getMangleContext();
+    mangler.mangleSEHFinallyBlock(parentSEHFn, os);
+  }
+
+  mlir::Location loc = getLoc(finally.getBeginLoc());
+  auto fnType = cir::FuncType::get(
+      {builder.getUInt8Ty(), builder.getVoidPtrTy()}, builder.getVoidTy());
+
+  builder.setInsertionPoint(parentCGF.curFn);
+  cir::FuncOp fn = cir::FuncOp::create(builder, loc, name, fnType);
+  fn.setLinkage(cir::GlobalLinkageKind::InternalLinkage);
+  fn.setSymVisibility("private");
+  fn->setAttr(cir::CIRDialect::getNoThrowAttrName(), builder.getUnitAttr());
+  fn->setAttr(cir::CIRDialect::getNoUnwindAttrName(), builder.getUnitAttr());
+  cgm.insertGlobalSymbol(fn);
+
+  mlir::Block *entry = fn.addEntryBlock();
+
+  CIRGenFunction subCgf(cgm, builder, /*suppressNewContext=*/true);
+  subCgf.curFn = fn;
+  subCgf.isOutlinedSEHHelper = true;
+  subCgf.curSEHParent = parentCGF.curSEHParent;
+  subCgf.curCodeDecl = parentCGF.curCodeDecl;
+
+  builder.setInsertionPointToStart(entry);
+
+  mlir::Value framePtrArg = entry->getArgument(1);
+
+  CIRGenFunction::SourceLocRAIIObject helperLoc(subCgf,
+                                                finally.getSourceRange());
+  CIRGenFunction::LexicalScope helperScope(subCgf, loc, entry);
+  SymTableScopeTy varScope(subCgf.symbolTable);
+
+  struct FinallyCaptureFinder : public ConstStmtVisitor<FinallyCaptureFinder> {
+    SmallVector<const VarDecl *, 4> captures;
+    llvm::SmallPtrSet<const VarDecl *, 4> visited;
+
+    void Visit(const Stmt *s) {
+      if (!s)
+        return;
+      ConstStmtVisitor<FinallyCaptureFinder>::Visit(s);
+      for (const Stmt *child : s->children())
+        if (child)
+          Visit(child);
+    }
+
+    void VisitDeclRefExpr(const DeclRefExpr *e) {
+      if (const auto *vd = dyn_cast<VarDecl>(e->getDecl())) {
+        if (vd->isLocalVarDeclOrParm() && vd->hasLocalStorage()) {
+          if (visited.insert(vd).second)
+            captures.push_back(vd);
+        }
+      }
+    }
+  };
+
+  FinallyCaptureFinder finder;
+  finder.Visit(finally.getBlock());
+
+  for (const VarDecl *vd : finder.captures) {
+    auto it = parentCGF.localDeclMap.find(vd);
+    if (it == parentCGF.localDeclMap.end())
+      continue;
+    Address parentAlloca = it->second;
+
+    int idx = -1;
+    for (size_t i = 0; i < parentCGF.escapedLocals.size(); ++i) {
+      if (parentCGF.escapedLocals[i].first == vd) {
+        idx = static_cast<int>(i);
+        break;
+      }
+    }
+    if (idx == -1) {
+      idx = static_cast<int>(parentCGF.escapedLocals.size());
+      parentCGF.escapedLocals.push_back({vd, parentAlloca});
+    }
+
+    auto parentFn = mlir::cast<cir::FuncOp>(parentCGF.curFn);
+    auto parentSym = mlir::FlatSymbolRefAttr::get(parentFn.getSymNameAttr());
+    auto gvAttr = cir::GlobalViewAttr::get(builder.getVoidPtrTy(), parentSym);
+    auto parentPtr = cir::ConstantOp::create(builder, loc,
+                                             builder.getVoidPtrTy(), gvAttr);
+    auto idxVal = builder.getSInt32(idx, loc);
+    auto recoveredVoidPtr = cir::LLVMIntrinsicCallOp::create(
+        builder, loc, builder.getStringAttr("localrecover"),
+        builder.getVoidPtrTy(),
+        mlir::ValueRange{parentPtr, framePtrArg, idxVal});
+    auto typedRecoveredPtr = builder.createBitcast(
+        loc, recoveredVoidPtr.getResult(), parentAlloca.getPointer().getType());
+    subCgf.setAddrOfLocalVar(
+        vd, Address(typedRecoveredPtr, parentAlloca.getElementType(),
+                    parentAlloca.getAlignment()));
+  }
+
+  (void)subCgf.emitStmt(finally.getBlock(), /*useCurrentScope=*/true);
+
+  mlir::Block *curBlock = builder.getBlock();
+  if (curBlock &&
+      (!curBlock->mightHaveTerminator() || !curBlock->getTerminator())) {
+    cir::ReturnOp::create(builder, loc);
+  }
+
+  return fn;
+}
+
 mlir::LogicalResult CIRGenFunction::emitSEHTryStmt(const SEHTryStmt &s) {
-  if (s.getFinallyHandler()) {
-    cgm.errorNYI(s.getSourceRange(), "emitSEHTryStmt with __finally");
-    return mlir::failure();
+  if (const SEHFinallyStmt *finally = s.getFinallyHandler()) {
+    // Set personality function for SEH if not already set.
+    auto funcOp = mlir::cast<cir::FuncOp>(curFn);
+    if (!funcOp.getPersonality()) {
+      const llvm::Triple &triple = cgm.getTarget().getTriple();
+      const EHPersonality &personality = getSEHPersonalityMSVC(triple);
+      funcOp.setPersonality(getPersonalityFn(cgm, personality));
+    }
+
+    cir::FuncOp finallyFn = GenerateSEHFinallyFunction(*this, *finally);
+
+    mlir::Location tryLoc = getLoc(s.getBeginLoc());
+    Address abnormalSlot = createMemTempWithoutCast(
+        getContext().UnsignedCharTy, tryLoc, "abnormal_termination.slot");
+    mlir::Value one = builder.getConstantInt(tryLoc, builder.getUInt8Ty(), 1);
+    builder.createStore(tryLoc, one, abnormalSlot);
+
+    sehFinallyAbnormalSlotStack.push_back(abnormalSlot);
+
+    mlir::LogicalResult tryRes = mlir::success();
+
+    cir::CleanupScopeOp::create(
+        builder, tryLoc, cir::CleanupKind::All,
+        /*bodyBuilder=*/
+        [&](mlir::OpBuilder &b, mlir::Location loc) {
+          mlir::Region *bodyRegion = builder.getBlock()->getParent();
+          mlir::Block *bodyEntryBlock = builder.getBlock();
+          mlir::Block *bodyExitBlock = builder.createBlock(bodyRegion);
+          builder.setInsertionPointToEnd(bodyEntryBlock);
+
+          sehTryEpilogueStack.push_back(bodyExitBlock);
+
+          RunCleanupsScope tryBodyCleanups(*this);
+          if (emitStmt(s.getTryBlock(), /*useCurrentScope=*/true).failed())
+            tryRes = mlir::failure();
+          tryBodyCleanups.forceCleanup();
+
+          if (!builder.getBlock()->mightHaveTerminator() ||
+              !builder.getBlock()->getTerminator()) {
+            mlir::Value zero = builder.getConstantInt(loc, builder.getUInt8Ty(), 0);
+            builder.createStore(loc, zero, abnormalSlot);
+            cir::BrOp::create(builder, loc, bodyExitBlock);
+          }
+
+          builder.setInsertionPointToEnd(bodyExitBlock);
+          if (!bodyExitBlock->mightHaveTerminator() ||
+              !bodyExitBlock->getTerminator()) {
+            cir::YieldOp::create(builder, loc);
+          }
+
+          sehTryEpilogueStack.pop_back();
+        },
+        /*cleanupBuilder=*/
+        [&](mlir::OpBuilder &b, mlir::Location loc) {
+          mlir::Value abnormalTerm = builder.createLoad(loc, abnormalSlot);
+          auto framePtr = cir::LLVMIntrinsicCallOp::create(
+              builder, loc, builder.getStringAttr("localaddress"),
+              builder.getVoidPtrTy());
+          cir::CallOp callOp = cir::CallOp::create(
+              builder, loc,
+              mlir::FlatSymbolRefAttr::get(finallyFn.getSymNameAttr()),
+              builder.getVoidTy(),
+              mlir::ValueRange{abnormalTerm, framePtr.getResult()});
+          callOp->setAttr(cir::CIRDialect::getNoThrowAttrName(),
+                          builder.getUnitAttr());
+          callOp->setAttr(cir::CIRDialect::getNoUnwindAttrName(),
+                          builder.getUnitAttr());
+          cir::YieldOp::create(builder, loc);
+        });
+
+    sehFinallyAbnormalSlotStack.pop_back();
+    return tryRes;
   }
 
   const SEHExceptStmt *exceptStmt = s.getExceptHandler();

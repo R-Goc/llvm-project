@@ -865,6 +865,11 @@ mlir::LogicalResult CIRGenFunction::emitSEHLeaveStmt(const SEHLeaveStmt &s) {
     return mlir::failure();
   }
   mlir::Location loc = getLoc(s.getSourceRange());
+  if (!sehFinallyAbnormalSlotStack.empty() &&
+      sehFinallyAbnormalSlotStack.back().isValid()) {
+    mlir::Value zero = builder.getConstantInt(loc, builder.getUInt8Ty(), 0);
+    builder.createStore(loc, zero, sehFinallyAbnormalSlotStack.back());
+  }
   cir::BrOp::create(builder, loc, sehTryEpilogueStack.back());
   builder.createBlock(builder.getBlock()->getParent());
   return mlir::success();
