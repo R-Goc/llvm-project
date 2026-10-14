@@ -2712,7 +2712,7 @@ void CIRGenModule::emitTopLevelDecl(Decl *decl) {
     break;
   }
 
-  case Decl::FileScopeAsm:
+  case Decl::FileScopeAsm: {
     // File-scope asm is ignored during device-side CUDA compilation.
     if (langOpts.CUDA && langOpts.CUDAIsDevice)
       break;
@@ -2727,6 +2727,60 @@ void CIRGenModule::emitTopLevelDecl(Decl *decl) {
     globalScopeAsm.push_back(builder.getStringAttr(line));
     break;
   }
+
+  case Decl::PragmaComment: {
+    const auto *pcd = cast<PragmaCommentDecl>(decl);
+    switch (pcd->getCommentKind()) {
+    case PCK_Unknown:
+      llvm_unreachable("unexpected pragma comment kind");
+    case PCK_Linker:
+      appendLinkerOptions(pcd->getArg());
+      break;
+    case PCK_Lib:
+      addDependentLib(pcd->getArg());
+      break;
+    case PCK_Compiler:
+    case PCK_ExeStr:
+    case PCK_User:
+    case PCK_Copyright:
+      break;
+    }
+    break;
+  }
+
+  case Decl::PragmaDetectMismatch: {
+    const auto *pdmd = cast<PragmaDetectMismatchDecl>(decl);
+    addDetectMismatch(pdmd->getName(), pdmd->getValue());
+    break;
+  }
+  }
+}
+
+void CIRGenModule::addDetectMismatch(StringRef name, StringRef value) {
+  if (getTriple().isOSBinFormatCOFF()) {
+    std::string opt =
+        "/FAILIFMISMATCH:\"" + name.str() + "=" + value.str() + "\"";
+    linkerOptions.push_back(opt);
+  }
+}
+
+void CIRGenModule::addDependentLib(StringRef lib) {
+  if (getTriple().isOSBinFormatCOFF()) {
+    bool quote = lib.contains(' ');
+    std::string opt = "/DEFAULTLIB:";
+    if (quote)
+      opt += "\"";
+    opt += lib;
+    if (!lib.ends_with(".lib"))
+      opt += ".lib";
+    if (quote)
+      opt += "\"";
+    linkerOptions.push_back(opt);
+  }
+}
+
+void CIRGenModule::appendLinkerOptions(StringRef opts) {
+  linkerOptions.push_back(opts.str());
 }
 
 void CIRGenModule::setInitializer(cir::GlobalOp &op, mlir::Attribute value) {
@@ -4132,6 +4186,13 @@ void CIRGenModule::release() {
     theModule->setAttr(
         cir::CIRDialect::getRecordLayoutsAttrName(),
         mlir::DictionaryAttr::get(&getMLIRContext(), recordLayoutEntries));
+
+  if (!linkerOptions.empty()) {
+    SmallVector<mlir::Attribute> optsAttrs;
+    for (const auto &opt : linkerOptions)
+      optsAttrs.push_back(builder.getStringAttr(opt));
+    theModule->setAttr("cir.linker_options", builder.getArrayAttr(optsAttrs));
+  }
 
   if (getTriple().isAMDGPU() ||
       (getTriple().isSPIRV() && getTriple().getVendor() == llvm::Triple::AMD))
