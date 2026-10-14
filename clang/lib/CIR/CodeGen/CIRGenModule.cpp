@@ -1912,6 +1912,19 @@ void CIRGenModule::applyReplacements() {
   if (replacements.empty())
     return;
 
+  // Resolve transitive replacement chains: if A -> B and B -> C, then A -> C.
+  for (auto &entry : replacements) {
+    llvm::SmallPtrSet<mlir::Operation *, 4> visited;
+    visited.insert(entry.second);
+    while (auto fn = mlir::dyn_cast_or_null<cir::FuncOp>(entry.second)) {
+      auto it = replacements.find(fn.getSymName());
+      if (it != replacements.end() && visited.insert(it->second).second)
+        entry.second = it->second;
+      else
+        break;
+    }
+  }
+
   // Build a symbol user map once — this walks the module O(M) one time.
   // Previously, each replaceAllSymbolUses call walked the entire module,
   // giving O(R × M) quadratic behavior for R replacements.
@@ -1932,6 +1945,27 @@ void CIRGenModule::applyReplacements() {
       errorNYI(replacement->getLoc(), "replacement is not a function");
       continue;
     }
+    if (newF == oldF)
+      continue;
+
+    for (mlir::Operation *user : userMap.getUsers(oldF)) {
+      auto call = mlir::dyn_cast<cir::CallOp>(user);
+      if (!call)
+        continue;
+      mlir::OpBuilder b(call);
+      for (auto [idx, pair] : llvm::enumerate(llvm::zip(
+               call.getArgs(), newF.getFunctionType().getInputs()))) {
+        auto [argOp, fnArgType] = pair;
+        if (argOp.getType() != fnArgType) {
+          if (mlir::isa<cir::PointerType>(argOp.getType()) &&
+              mlir::isa<cir::PointerType>(fnArgType)) {
+            mlir::Value castOp = cir::CastOp::create(
+                b, call.getLoc(), fnArgType, cir::CastKind::bitcast, argOp);
+            call.setOperand(idx, castOp);
+          }
+        }
+      }
+    }
 
     assert(verifyPointerTypeArgs(oldF, newF, userMap) &&
            "call argument types do not match replacement function");
@@ -1939,7 +1973,8 @@ void CIRGenModule::applyReplacements() {
     // Replace old with new, but keep the old order.  Uses
     // SymbolUserMap to touch only actual users, not the whole module.
     userMap.replaceAllUsesWith(oldF, newF.getSymNameAttr());
-    newF->moveBefore(oldF);
+    if (newF->getBlock() && oldF->getBlock())
+      newF->moveBefore(oldF);
     eraseGlobalSymbol(oldF);
     oldF->erase();
   }

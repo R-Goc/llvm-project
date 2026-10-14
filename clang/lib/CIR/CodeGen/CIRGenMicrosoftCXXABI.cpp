@@ -1215,9 +1215,13 @@ cir::GlobalOp CIRGenMicrosoftCXXABI::getAddrOfVTable(const CXXRecordDecl *rd,
       rd->hasAttr<DLLImportAttr>() ? cir::GlobalLinkageKind::LinkOnceODRLinkage
                                    : cgm.getVTableLinkage(rd);
 
+  const VTableLayout &vtLayout =
+      vtContext.getVFTableLayout(rd, vfptr->FullOffsetInMDC);
+  mlir::Type vtableType = cgm.getVTables().getVTableType(vtLayout);
+
   cir::GlobalOp vtable =
       cgm.createGlobalOp(cgm.getLoc(rd->getLocation()), vftableName,
-                         cgm.getVTableComponentType(), /*isConstant=*/true);
+                         vtableType, /*isConstant=*/true);
   vtable.setLinkage(linkage);
 
   if (rd->hasAttr<DLLExportAttr>())
@@ -1234,6 +1238,16 @@ CIRGenMicrosoftCXXABI::getVTableAddressPoint(BaseSubobject base,
   if (!vtable)
     return nullptr;
 
+  MicrosoftVTableContext &vtContext = cgm.getMicrosoftVTableContext();
+  const VTableLayout &vtLayout =
+      vtContext.getVFTableLayout(vtableClass, base.getBaseOffset());
+  unsigned addressPointIndex =
+      (cgm.getASTContext().getLangOpts().RTTIData &&
+       llvm::any_of(vtLayout.vtable_components(),
+                    [](const VTableComponent &vtc) { return vtc.isRTTIKind(); }))
+          ? 1
+          : 0;
+
   mlir::OpBuilder &builder = cgm.getBuilder();
   auto vtablePtrTy = cir::VPtrType::get(builder.getContext());
 
@@ -1242,7 +1256,7 @@ CIRGenMicrosoftCXXABI::getVTableAddressPoint(BaseSubobject base,
       mlir::FlatSymbolRefAttr::get(vtable.getSymNameAttr()),
       cir::AddressPointAttr::get(cgm.getBuilder().getContext(),
                                  /*vtableIndex=*/0,
-                                 /*addressPointIndex=*/0));
+                                 addressPointIndex));
 }
 
 mlir::Value CIRGenMicrosoftCXXABI::getVTableAddressPointInStructor(

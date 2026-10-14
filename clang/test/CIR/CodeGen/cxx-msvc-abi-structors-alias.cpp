@@ -47,3 +47,24 @@ template struct B<int>;
 // This has to be weak, and emitting weak aliases is fragile, so we don't do the
 // aliasing.
 // CHECK-DAG: cir.func {{.*}}comdat {{.*}}weak_odr dso_local @"??1?$B@H@test3@@UAE@XZ"(
+
+namespace test4 {
+struct A {
+  virtual ~A() {}
+};
+struct B : A {
+  virtual ~B() {}
+};
+struct C : B {
+  virtual ~C() {}
+};
+
+void bar() {
+  C c;
+}
+}
+// CHECK-LABEL: cir.func dso_local @"?bar@test4@@YAXXZ"()
+// CHECK:         %[[ALLOCA:.*]] = cir.alloca "c"
+// CHECK:         %[[CAST:.*]] = cir.cast bitcast %[[ALLOCA]] : !cir.ptr<!rec_test43A3AC> -> !cir.ptr<!rec_test43A3AA>
+// CHECK:         cir.call @"??1A@test4@@UAE@XZ"(%[[CAST]])
+// CHECK:       cir.func {{.*}} @"??1A@test4@@UAE@XZ"(
