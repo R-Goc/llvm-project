@@ -1613,12 +1613,6 @@ static void printCallCommon(mlir::Operation *op,
   if (op->hasAttr(CIRDialect::getWillReturnAttrName()))
     printer << " willreturn";
 
-  if (callLikeOp.getCallingConv() != cir::CallingConv::C) {
-    printer << " cc(";
-    printer << stringifyCallingConv(callLikeOp.getCallingConv());
-    printer << ")";
-  }
-
   llvm::StringRef elidedAttrs[] = {
       CIRDialect::getCalleeAttrName(),
       CIRDialect::getCallingConvAttrName(),

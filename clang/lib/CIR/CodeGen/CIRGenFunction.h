@@ -37,6 +37,7 @@
 #include "clang/CIR/MissingFeatures.h"
 #include "clang/CIR/TypeEvaluationKind.h"
 #include "clang/CodeGenUtils/StmtUtils.h"
+#include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/ScopedHashTable.h"
 #include "llvm/IR/Instructions.h"
 #include "llvm/IR/Intrinsics.h"
@@ -1267,6 +1268,9 @@ public:
            mlir::isa<cir::CatchAllAttr>(ehSpecTryOp.getHandlerTypes()[0]);
   }
 
+  llvm::DenseMap<const ParmVarDecl *, EHScopeStack::stable_iterator>
+      calleeDestructedParamCleanups;
+
   bool isCatchOrCleanupRequired();
 
   /// Takes the old cleanup stack size and emits the cleanup blocks
@@ -2050,12 +2054,22 @@ public:
   void emitCallAndReturnForThunk(cir::FuncOp callee, SourceRange fnLoc,
                                  const ThunkInfo *thunk, bool isUnprototyped);
 
+  enum class EvaluationOrder {
+    /// No language constraints on evaluation order.
+    Default,
+    /// Language semantics require left-to-right evaluation.
+    ForceLeftToRight,
+    /// Language semantics require right-to-left evaluation.
+    ForceRightToLeft
+  };
+
   void emitCallArg(CallArgList &args, const clang::Expr *e,
                    clang::QualType argType);
   void emitCallArgs(
       CallArgList &args, PrototypeWrapper prototype,
       llvm::iterator_range<clang::CallExpr::const_arg_iterator> argRange,
-      AbstractCallee callee = AbstractCallee(), unsigned paramsToSkip = 0);
+      AbstractCallee callee = AbstractCallee(), unsigned paramsToSkip = 0,
+      EvaluationOrder order = EvaluationOrder::Default);
   RValue emitCallExpr(const clang::CallExpr *e,
                       ReturnValueSlot returnValue = ReturnValueSlot());
   LValue emitCallExprLValue(const clang::CallExpr *e);
