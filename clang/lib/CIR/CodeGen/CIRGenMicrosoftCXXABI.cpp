@@ -655,6 +655,9 @@ void CIRGenMicrosoftCXXABI::emitCXXStructor(GlobalDecl gd) {
       dtor->getParent()->getNumVBases() == 0)
     gd = gd.getWithDtorType(Dtor_Base);
 
+  if (gd.getDtorType() == Dtor_Base && !cgm.tryEmitBaseDestructorAsAlias(dtor))
+    return;
+
   if (gd.getDtorType() == Dtor_VectorDeleting) {
     if (!cgm.classNeedsVectorDestructor(dtor->getParent())) {
       GlobalDecl scalarDtorGD(dtor, Dtor_Deleting);
@@ -1028,9 +1031,13 @@ cir::GlobalOp CIRGenMicrosoftCXXABI::getAddrOfVTable(const CXXRecordDecl *rd,
       rd->hasAttr<DLLImportAttr>() ? cir::GlobalLinkageKind::LinkOnceODRLinkage
                                    : cgm.getVTableLinkage(rd);
 
+  const VTableLayout &vtLayout =
+      vtContext.getVFTableLayout(rd, vfptr->FullOffsetInMDC);
+  mlir::Type vtableType = cgm.getVTables().getVTableType(vtLayout);
+
   cir::GlobalOp vtable =
       cgm.createGlobalOp(cgm.getLoc(rd->getLocation()), vftableName,
-                         cgm.getVTableComponentType(), /*isConstant=*/true);
+                         vtableType, /*isConstant=*/true);
   vtable.setLinkage(linkage);
 
   if (rd->hasAttr<DLLExportAttr>())
