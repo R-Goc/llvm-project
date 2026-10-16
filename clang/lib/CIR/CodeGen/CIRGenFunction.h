@@ -1272,6 +1272,7 @@ public:
       calleeDestructedParamCleanups;
 
   bool isCatchOrCleanupRequired();
+  bool currentFunctionUsesSEHTry() const;
 
   /// Takes the old cleanup stack size and emits the cleanup blocks
   /// that have been added.
@@ -2252,7 +2253,9 @@ public:
                                         const FunctionArgList &args);
 
   void emitDeleteCall(const FunctionDecl *deleteFD, mlir::Value ptr,
-                      QualType deleteTy);
+                      QualType deleteTy, mlir::Value numElements = nullptr,
+                      CharUnits cookieSize = CharUnits::Zero(),
+                      cir::FuncOp calleeOverride = nullptr);
 
   mlir::LogicalResult emitDoStmt(const clang::DoStmt &s);
 

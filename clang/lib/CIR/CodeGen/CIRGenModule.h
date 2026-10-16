@@ -611,6 +611,18 @@ public:
     deferredDeclsToEmit.emplace_back(GD);
   }
 
+  llvm::SmallPtrSet<const clang::CXXRecordDecl *, 16> requireVectorDeletingDtor;
+  bool classNeedsVectorDestructor(const clang::CXXRecordDecl *rd);
+  void requireVectorDestructorDefinition(const clang::CXXRecordDecl *rd);
+
+  bool hasDirectGlobalDelete = false;
+  SmallVector<std::pair<cir::FuncOp, const FunctionDecl *>, 2>
+      pendingMSVCGlobalDeletes;
+
+  void noteDirectGlobalDelete() { hasDirectGlobalDelete = true; }
+  cir::FuncOp getOrCreateMSVCGlobalDeleteWrapper(const FunctionDecl *globOD);
+  void emitGlobalDeleteForwardingBodies();
+
   void emitTopLevelDecl(clang::Decl *decl);
 
   /// Determine whether the definition must be emitted; if this returns \c
