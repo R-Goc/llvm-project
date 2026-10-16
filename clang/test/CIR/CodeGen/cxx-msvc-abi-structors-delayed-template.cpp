@@ -15,7 +15,7 @@ template <class T> void foo(T t) { new ImplicitCtor; }
 void bar() { foo(0); }
 
 // CHECK-LABEL: cir.func {{.*}} @"??0ImplicitCtor@vtable_referenced_from_template@@QAE@XZ"
-// CHECK:   %[[AP:.*]] = cir.vtable.address_point(@"??_7ImplicitCtor@vtable_referenced_from_template@@6B@", address_point = <index = 0, offset = 0>)
+// CHECK:   %[[AP:.*]] = cir.vtable.address_point(@"??_7ImplicitCtor@vtable_referenced_from_template@@6B@", address_point = <index = 0, offset = 1>)
 // CHECK:   %[[VPTR:.*]] = cir.vtable.get_vptr %{{.*}}
 // CHECK:   cir.store {{.*}} %[[AP]], %[[VPTR]]
 }
