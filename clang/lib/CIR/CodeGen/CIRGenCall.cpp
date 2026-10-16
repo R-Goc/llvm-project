@@ -1286,8 +1286,18 @@ RValue CIRGenFunction::emitCall(const CIRGenFunctionInfo &funcInfo,
       v = arg.getKnownRValue().getValue();
 
       // We might have to widen integers, but we should never truncate.
-      if (argType != v.getType() && mlir::isa<cir::IntType>(v.getType()))
-        cgm.errorNYI(loc, "emitCall: widening integer call argument");
+      if (argType != v.getType() && mlir::isa<cir::IntType>(v.getType())) {
+        if (auto dstIntTy = mlir::dyn_cast<cir::IntType>(argType)) {
+          auto srcIntTy = mlir::cast<cir::IntType>(v.getType());
+          if (dstIntTy.getWidth() > srcIntTy.getWidth()) {
+            v = builder.createIntCast(v, dstIntTy);
+          } else {
+            cgm.errorNYI(loc, "emitCall: widening integer call argument");
+          }
+        } else {
+          cgm.errorNYI(loc, "emitCall: widening integer call argument");
+        }
+      }
 
       // If we have a pointer argument and there's an address space mismatch,
       // insert an address_space cast to match the expected function signature.
@@ -1660,8 +1670,14 @@ QualType CIRGenFunction::getVarArgType(const Expr *arg) {
   if (!getTarget().getTriple().isOSWindows())
     return arg->getType();
 
-  assert(!cir::MissingFeatures::msabi());
-  cgm.errorNYI(arg->getSourceRange(), "getVarArgType: NYI for Windows target");
+  if (arg->getType()->isIntegerType() &&
+      getContext().getTypeSize(arg->getType()) <
+          getContext().getTargetInfo().getPointerWidth(LangAS::Default) &&
+      arg->isNullPointerConstant(getContext(),
+                                 Expr::NPC_ValueDependentIsNotNull)) {
+    return getContext().getIntPtrType();
+  }
+
   return arg->getType();
 }
 

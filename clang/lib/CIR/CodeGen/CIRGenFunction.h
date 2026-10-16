@@ -38,6 +38,7 @@
 #include "clang/CIR/TypeEvaluationKind.h"
 #include "clang/CodeGenUtils/CallUtils.h"
 #include "clang/CodeGenUtils/StmtUtils.h"
+#include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/ScopedHashTable.h"
 #include "llvm/IR/Instructions.h"
 #include "llvm/IR/Intrinsics.h"
@@ -1270,6 +1271,11 @@ public:
            mlir::isa<cir::CatchAllAttr>(ehSpecTryOp.getHandlerTypes()[0]);
   }
 
+  /// Scope entries for callee-destructed parameters registered in function
+  /// prologue, reserved for callee cleanup deactivation.
+  llvm::DenseMap<const ParmVarDecl *, EHScopeStack::stable_iterator>
+      calleeDestructedParamCleanups;
+
   bool isCatchOrCleanupRequired();
 
   /// Takes the old cleanup stack size and emits the cleanup blocks
@@ -2052,6 +2058,15 @@ public:
   /// Emit the call and return for a thunk function.
   void emitCallAndReturnForThunk(cir::FuncOp callee, SourceRange fnLoc,
                                  const ThunkInfo *thunk, bool isUnprototyped);
+
+  enum class EvaluationOrder {
+    /// No language constraints on evaluation order.
+    Default,
+    /// Language semantics require left-to-right evaluation.
+    ForceLeftToRight,
+    /// Language semantics require right-to-left evaluation.
+    ForceRightToLeft
+  };
 
   void emitCallArg(CallArgList &args, const clang::Expr *e,
                    clang::QualType argType);
