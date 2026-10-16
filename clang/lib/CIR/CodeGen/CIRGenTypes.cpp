@@ -631,6 +631,7 @@ mlir::Type CIRGenTypes::convertType(QualType type) {
     NestedNameSpecifier mptNNS = mpt->getQualifier();
     auto clsTy = mlir::cast<cir::RecordType>(
         convertType(QualType(mptNNS.getAsType(), 0)));
+
     if (mpt->isMemberDataPointer()) {
       mlir::Type memberTy = convertType(mpt->getPointeeType());
       resultType = cir::DataMemberType::get(memberTy, clsTy);
@@ -774,6 +775,14 @@ CIRGenTypes::clangCallConvToCIRCallConv(clang::CallingConv cc) {
     if (cgm.getTriple().isSPIROrSPIRV())
       return cir::CallingConv::SpirFunction;
     return cir::CallingConv::C;
+  case CC_X86StdCall:
+    return cir::CallingConv::X86_StdCall;
+  case CC_X86FastCall:
+    return cir::CallingConv::X86_FastCall;
+  case CC_X86ThisCall:
+    return cir::CallingConv::X86_ThisCall;
+  case CC_X86VectorCall:
+    return cir::CallingConv::X86_VectorCall;
   case CC_DeviceKernel:
     return cgm.getTargetCIRGenInfo().getDeviceKernelCallingConv();
   default:
@@ -838,9 +847,8 @@ const CIRGenFunctionInfo &CIRGenTypes::arrangeCIRFunctionInfo(
     return *fi;
   }
 
-  cir::CallingConv cirCC = clangCallConvToCIRCallConv(info.getCC());
-
   // Construction the function info. We co-allocate the ArgInfos.
+  cir::CallingConv cirCC = clangCallConvToCIRCallConv(info.getCC());
   fi = CIRGenFunctionInfo::create(cirCC, info, isInstanceMethod, returnType,
                                   argTypes, required);
   functionInfos.insert(fi, insertToken);

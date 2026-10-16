@@ -1492,6 +1492,20 @@ static mlir::ParseResult parseCallCommon(mlir::OpAsmParser &parser,
     result.addAttribute(CIRDialect::getWillReturnAttrName(),
                         mlir::UnitAttr::get(parser.getContext()));
 
+  cir::CallingConv callConv = cir::CallingConv::C;
+  if (parser.parseOptionalKeyword("cc").succeeded()) {
+    llvm::SMLoc loc = parser.getCurrentLocation();
+    if (parser.parseLParen().failed())
+      return failure();
+    if (parseCIRKeyword<cir::CallingConv>(parser, callConv).failed())
+      return parser.emitError(loc) << "unknown calling convention";
+    if (parser.parseRParen().failed())
+      return failure();
+    result.addAttribute(
+        CIRDialect::getCallingConvAttrName(),
+        cir::CallingConvAttr::get(parser.getContext(), callConv));
+  }
+
   llvm::SMLoc attrsLoc = parser.getCurrentLocation();
   if (parser.parseOptionalAttrDict(result.attributes))
     return ::mlir::failure();
@@ -1599,6 +1613,12 @@ static void printCallCommon(mlir::Operation *op,
   if (op->hasAttr(CIRDialect::getWillReturnAttrName()))
     printer << " willreturn";
 
+  if (callLikeOp.getCallingConv() != cir::CallingConv::C) {
+    printer << " cc(";
+    printer << stringifyCallingConv(callLikeOp.getCallingConv());
+    printer << ")";
+  }
+
   llvm::StringRef elidedAttrs[] = {
       CIRDialect::getCalleeAttrName(),
       CIRDialect::getCallingConvAttrName(),
@@ -1665,6 +1685,7 @@ verifyCallCommInSymbolUses(mlir::Operation *op,
   // An indirect call is checked against the function type its callee pointer
   // points to, and a direct call against its callee's declaration.
   cir::FuncType fnType;
+  cir::FuncOp fn;
   bool hasPrototype = true;
   auto fnAttr =
       op->getAttrOfType<FlatSymbolRefAttr>(CIRDialect::getCalleeAttrName());
@@ -1679,7 +1700,7 @@ verifyCallCommInSymbolUses(mlir::Operation *op,
              << "indirect callee must be a pointer to a function, but has type "
              << calleeTy;
   } else {
-    auto fn = symbolTable.lookupNearestSymbolFrom<cir::FuncOp>(op, fnAttr);
+    fn = symbolTable.lookupNearestSymbolFrom<cir::FuncOp>(op, fnAttr);
     if (!fn)
       return op->emitOpError() << "'" << fnAttr.getValue()
                                << "' does not reference a valid function";
@@ -1706,7 +1727,11 @@ verifyCallCommInSymbolUses(mlir::Operation *op,
                << i;
   }
 
-  assert(!cir::MissingFeatures::opCallCallConv());
+  if (fn && callIf.getCallingConv() != fn.getCallingConv())
+    return op->emitOpError("calling convention mismatch between call (")
+           << stringifyCallingConv(callIf.getCallingConv())
+           << ") and callee ("
+           << stringifyCallingConv(fn.getCallingConv()) << ")";
 
   // Void function must not return any results.
   if (fnType.hasVoidReturn() && op->getNumResults() != 0)
