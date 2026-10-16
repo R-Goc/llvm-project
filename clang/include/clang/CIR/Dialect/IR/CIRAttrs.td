@@ -590,6 +590,19 @@ def CIR_ConstPtrAttr : CIR_ValueLikeAttr<"ConstPtr", "ptr"> {
 }
 
 //===----------------------------------------------------------------------===//
+// MSInheritanceModelAttr
+//===----------------------------------------------------------------------===//
+
+def CIR_MSInheritanceModelAttr : CIR_EnumAttr<CIR_MSInheritanceModel,
+                                              "ms_inheritance"> {
+  let summary = "Attribute representing the MSVC inheritance model for member pointers";
+  let description = [{
+    Encodes the MSVC inheritance model for member pointers: `single`, `multiple`,
+    `virtual`, or `unspecified`.
+  }];
+}
+
+//===----------------------------------------------------------------------===//
 // DataMemberAttr
 //===----------------------------------------------------------------------===//
 
@@ -738,19 +751,36 @@ def CIR_MethodAttr : CIR_ValueLikeAttr<"Method", "method"> {
                         OptionalParameter<
                             "std::optional<mlir::FlatSymbolRefAttr>">:$symbol,
                         OptionalParameter<
-                            "std::optional<uint64_t>">:$vtable_offset);
+                            "std::optional<uint64_t>">:$vtable_offset,
+                        OptionalParameter<
+                            "std::optional<int32_t>">:$nv_offset,
+                        OptionalParameter<
+                            "std::optional<int32_t>">:$vbptr_offset,
+                        OptionalParameter<
+                            "std::optional<int32_t>">:$vbtable_offset);
 
   let builders = [
     AttrBuilderWithInferredContext<(ins "cir::MethodType":$type), [{
-      return $_get(type.getContext(), type, std::nullopt, std::nullopt);
+      return $_get(type.getContext(), type, std::nullopt, std::nullopt,
+                   std::nullopt, std::nullopt, std::nullopt);
     }]>,
     AttrBuilderWithInferredContext<(ins "cir::MethodType":$type,
                                         "mlir::FlatSymbolRefAttr":$symbol), [{
-      return $_get(type.getContext(), type, symbol, std::nullopt);
+      return $_get(type.getContext(), type, symbol, std::nullopt,
+                   std::nullopt, std::nullopt, std::nullopt);
     }]>,
     AttrBuilderWithInferredContext<(ins "cir::MethodType":$type,
                                         "uint64_t":$vtable_offset), [{
-      return $_get(type.getContext(), type, std::nullopt, vtable_offset);
+      return $_get(type.getContext(), type, std::nullopt, vtable_offset,
+                   std::nullopt, std::nullopt, std::nullopt);
+    }]>,
+    AttrBuilderWithInferredContext<(ins "cir::MethodType":$type,
+                                        "mlir::FlatSymbolRefAttr":$symbol,
+                                        "int32_t":$nv_offset,
+                                        "int32_t":$vbptr_offset,
+                                        "int32_t":$vbtable_offset), [{
+      return $_get(type.getContext(), type, symbol, std::nullopt,
+                   nv_offset, vbptr_offset, vbtable_offset);
     }]>,
   ];
 
@@ -769,6 +799,10 @@ def CIR_MethodAttr : CIR_ValueLikeAttr<"Method", "method"> {
     bool isVirtual() const {
       return getVtableOffset().has_value();
     }
+
+    int32_t getNVOffset() const { return getNvOffset().value_or(0); }
+    int32_t getVBPtrOffset() const { return getVbptrOffset().value_or(0); }
+    int32_t getVBTableOffset() const { return getVbtableOffset().value_or(0); }
   }];
 }
 
@@ -1508,6 +1542,18 @@ def CIR_FramePointerKindAttr
     ```
   }];
 }
+
+//===----------------------------------------------------------------------===//
+// DLLStorageClass
+//===----------------------------------------------------------------------===//
+
+def CIR_DLLStorageClass : CIR_I32Enum<"DLLStorageClass", "DLL storage class", [
+  I32EnumCase<"DefaultStorageClass", 0, "default">,
+  I32EnumCase<"DLLImportStorageClass", 1, "dllimport">,
+  I32EnumCase<"DLLExportStorageClass", 2, "dllexport">
+]>;
+
+def CIR_DLLStorageClassAttr : CIR_EnumAttr<CIR_DLLStorageClass, "dll_storage_class">;
 
 //===----------------------------------------------------------------------===//
 // GloblCtorAttr

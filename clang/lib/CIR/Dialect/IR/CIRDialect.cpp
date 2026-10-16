@@ -1492,20 +1492,6 @@ static mlir::ParseResult parseCallCommon(mlir::OpAsmParser &parser,
     result.addAttribute(CIRDialect::getWillReturnAttrName(),
                         mlir::UnitAttr::get(parser.getContext()));
 
-  cir::CallingConv callConv = cir::CallingConv::C;
-  if (parser.parseOptionalKeyword("cc").succeeded()) {
-    llvm::SMLoc loc = parser.getCurrentLocation();
-    if (parser.parseLParen().failed())
-      return failure();
-    if (parseCIRKeyword<cir::CallingConv>(parser, callConv).failed())
-      return parser.emitError(loc) << "unknown calling convention";
-    if (parser.parseRParen().failed())
-      return failure();
-    result.addAttribute(
-        CIRDialect::getCallingConvAttrName(),
-        cir::CallingConvAttr::get(parser.getContext(), callConv));
-  }
-
   llvm::SMLoc attrsLoc = parser.getCurrentLocation();
   if (parser.parseOptionalAttrDict(result.attributes))
     return ::mlir::failure();
@@ -1679,7 +1665,6 @@ verifyCallCommInSymbolUses(mlir::Operation *op,
   // An indirect call is checked against the function type its callee pointer
   // points to, and a direct call against its callee's declaration.
   cir::FuncType fnType;
-  cir::FuncOp fn;
   bool hasPrototype = true;
   auto fnAttr =
       op->getAttrOfType<FlatSymbolRefAttr>(CIRDialect::getCalleeAttrName());
@@ -1694,7 +1679,7 @@ verifyCallCommInSymbolUses(mlir::Operation *op,
              << "indirect callee must be a pointer to a function, but has type "
              << calleeTy;
   } else {
-    fn = symbolTable.lookupNearestSymbolFrom<cir::FuncOp>(op, fnAttr);
+    auto fn = symbolTable.lookupNearestSymbolFrom<cir::FuncOp>(op, fnAttr);
     if (!fn)
       return op->emitOpError() << "'" << fnAttr.getValue()
                                << "' does not reference a valid function";
@@ -1721,11 +1706,7 @@ verifyCallCommInSymbolUses(mlir::Operation *op,
                << i;
   }
 
-  if (fn && callIf.getCallingConv() != fn.getCallingConv())
-    return op->emitOpError("calling convention mismatch between call (")
-           << stringifyCallingConv(callIf.getCallingConv())
-           << ") and callee ("
-           << stringifyCallingConv(fn.getCallingConv()) << ")";
+  assert(!cir::MissingFeatures::opCallCallConv());
 
   // Void function must not return any results.
   if (fnType.hasVoidReturn() && op->getNumResults() != 0)
@@ -3650,18 +3631,27 @@ LogicalResult cir::DerivedClassAddrOp::verify() {
 static LogicalResult verifyMemberPtrCast(Operation *op, mlir::Value src,
                                          mlir::Type resultTy) {
   // Let the operand type be T1 C1::*, let the result type be T2 C2::*.
-  // Verify that T1 and T2 are the same type.
-  mlir::Type inputMemberTy;
-  mlir::Type resultMemberTy;
+  // Verify that T1 and T2 are the same type (ignoring the implicit `this`
+  // parameter for member functions, which points to C1 and C2 respectively).
   if (mlir::isa<cir::DataMemberType>(src.getType())) {
-    inputMemberTy =
+    auto inputMemberTy =
         mlir::cast<cir::DataMemberType>(src.getType()).getMemberTy();
-    resultMemberTy = mlir::cast<cir::DataMemberType>(resultTy).getMemberTy();
+    auto resultMemberTy =
+        mlir::cast<cir::DataMemberType>(resultTy).getMemberTy();
+    if (inputMemberTy != resultMemberTy)
+      return op->emitOpError()
+             << "member types of the operand and the result do not match";
+  } else if (mlir::isa<cir::MethodType>(src.getType())) {
+    auto inFnTy =
+        mlir::cast<cir::MethodType>(src.getType()).getMemberFuncTy();
+    auto resFnTy =
+        mlir::cast<cir::MethodType>(resultTy).getMemberFuncTy();
+    if (inFnTy.getReturnType() != resFnTy.getReturnType() ||
+        inFnTy.isVarArg() != resFnTy.isVarArg() ||
+        inFnTy.getInputs().drop_front() != resFnTy.getInputs().drop_front())
+      return op->emitOpError()
+             << "member types of the operand and the result do not match";
   }
-  assert(!cir::MissingFeatures::memberFuncPtrCast());
-  if (inputMemberTy != resultMemberTy)
-    return op->emitOpError()
-           << "member types of the operand and the result do not match";
 
   return mlir::success();
 }

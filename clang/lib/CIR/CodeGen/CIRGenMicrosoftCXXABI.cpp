@@ -1403,12 +1403,89 @@ CIRGenMicrosoftCXXABI::buildVirtualMethodAttr(cir::MethodType methodTy,
 
   MethodVFTableLocation ml =
       cgm.getMicrosoftVTableContext().getMethodVFTableLocation(md);
-  const ASTContext &astContext = cgm.getASTContext();
-  CharUnits pointerWidth = astContext.toCharUnitsFromBits(
-      astContext.getTargetInfo().getPointerWidth(LangAS::Default));
-  uint64_t vtableOffset = ml.Index * pointerWidth.getQuantity();
 
-  return cir::MethodAttr::get(methodTy, vtableOffset);
+  // Mangle the virtual member pointer thunk name (e.g. ??_9Method@@$BA@AE)
+  SmallString<256> thunkName;
+  llvm::raw_svector_ostream out(thunkName);
+  getMangleContext().mangleVirtualMemPtrThunk(md, ml, out);
+
+  auto thunkFuncOp = cgm.getModule().lookupSymbol<cir::FuncOp>(thunkName);
+  if (!thunkFuncOp) {
+    mlir::Location loc = cgm.getLoc(md->getLocation());
+    const CIRGenFunctionInfo &thunkFnInfo =
+        cgm.getTypes().arrangeUnprototypedMustTailThunk(md);
+    cir::FuncType thunkTy = cgm.getTypes().getFunctionType(thunkFnInfo);
+
+    thunkFuncOp = cgm.createCIRFunction(loc, thunkName, thunkTy, md);
+    thunkFuncOp.setLinkage(md->isExternallyVisible()
+                               ? cir::GlobalLinkageKind::LinkOnceODRLinkage
+                               : cir::GlobalLinkageKind::InternalLinkage);
+    thunkFuncOp.setVisibility(md->isExternallyVisible()
+                                  ? mlir::SymbolTable::Visibility::Public
+                                  : mlir::SymbolTable::Visibility::Private);
+    if (md->isExternallyVisible() && cgm.supportsCOMDAT())
+      thunkFuncOp.setSelfComdat();
+
+    cgm.setGVProperties(thunkFuncOp, md);
+    if (!exportThunk())
+      cgm.setDSOLocal(static_cast<mlir::Operation *>(thunkFuncOp));
+
+    cgm.setCIRFunctionAttributes(GlobalDecl(md), thunkFnInfo, thunkFuncOp,
+                                 /*isThunk=*/false);
+    cgm.setCIRFunctionAttributesForDefinition(md, thunkFuncOp);
+    thunkFuncOp->setAttr("thunk",
+                         mlir::UnitAttr::get(cgm.getBuilder().getContext()));
+
+    mlir::OpBuilder::InsertionGuard guard(cgm.getBuilder());
+    CIRGenFunction cgf(cgm, cgm.getBuilder());
+    cgf.curFn = thunkFuncOp;
+    cgf.curFnInfo = &thunkFnInfo;
+    cgf.curGD = GlobalDecl(md);
+    cgf.curFuncDecl = md;
+
+    mlir::Block *entryBlock = thunkFuncOp.addEntryBlock();
+    cgf.getBuilder().setInsertionPointToStart(entryBlock);
+    mlir::Value thisVal = entryBlock->getArgument(0);
+
+    auto voidPtrTy = cgf.getBuilder().getVoidPtrTy();
+    auto voidPtrPtrTy = cgf.getBuilder().getPointerTo(voidPtrTy);
+    mlir::Value thisVoidPtrPtr =
+        cgf.getBuilder().createBitcast(loc, thisVal, voidPtrPtrTy);
+    mlir::Value vtablePtr =
+        cgf.getBuilder().createAlignedLoad(loc, voidPtrTy, thisVoidPtrPtr);
+
+    mlir::Value slotOffset = cgf.getBuilder().getConstantInt(
+        loc, cgf.getBuilder().getUInt64Ty(), ml.Index);
+    mlir::Value vfnSlotPtr = cir::PtrStrideOp::create(
+        cgf.getBuilder(), loc, voidPtrTy, vtablePtr, slotOffset);
+    mlir::Value vfnSlotPtrPtr =
+        cgf.getBuilder().createBitcast(loc, vfnSlotPtr, voidPtrPtrTy);
+    mlir::Value calleeFnPtr =
+        cgf.getBuilder().createAlignedLoad(loc, voidPtrTy, vfnSlotPtrPtr);
+
+    auto fnPtrTy = cgf.getBuilder().getPointerTo(thunkTy);
+    mlir::Value calleeTyped =
+        cgf.getBuilder().createBitcast(loc, calleeFnPtr, fnPtrTy);
+
+    cgf.emitMustTailThunk(GlobalDecl(md), thisVal, calleeTyped, thunkTy);
+  }
+
+  const CXXRecordDecl *rd = md->getParent()->getMostRecentDecl();
+  CharUnits nvAdjustment = ml.VFPtrOffset;
+  unsigned vbTableIndex = 0;
+  if (ml.VBase)
+    vbTableIndex =
+        cgm.getMicrosoftVTableContext().getVBTableIndex(rd, ml.VBase) * 4;
+  if (vbTableIndex == 0 &&
+      rd->getMSInheritanceModel() == MSInheritanceModel::Virtual)
+    nvAdjustment -= cgm.getASTContext().getOffsetOfBaseWithVBPtr(rd);
+  CharUnits vbPtrOffset = CharUnits::Zero();
+  if (vbTableIndex)
+    vbPtrOffset = cgm.getASTContext().getASTRecordLayout(rd).getVBPtrOffset();
+
+  return cgm.getBuilder().getMethodAttr(
+      methodTy, thunkFuncOp, nvAdjustment.getQuantity(),
+      vbPtrOffset.getQuantity(), vbTableIndex);
 }
 
 mlir::Value CIRGenMicrosoftCXXABI::performThisAdjustment(

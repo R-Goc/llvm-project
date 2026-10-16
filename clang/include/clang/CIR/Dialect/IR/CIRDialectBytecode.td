@@ -41,6 +41,12 @@ class OptionalInt<string type> :
   WithPrinter<"writeOptionalInt($_writer, $_getter)",
   WithType   <"std::optional<" # type # ">">>>>;
 
+class OptionalSignedInt<string type> :
+  WithParser <"succeeded(readOptionalSignedInt($_reader, $_var))",
+  WithBuilder<"$_args",
+  WithPrinter<"writeOptionalSignedInt($_writer, $_getter)",
+  WithType   <"std::optional<" # type # ">">>>>;
+
 // OptionalAttribute for a parameter declared std::optional<...>. Same wire
 // format, different C++ spelling.
 class StdOptionalAttribute<string type> :
@@ -253,10 +259,14 @@ def DataMemberAttr : DialectAttribute<(attr
 def MethodAttr : DialectAttribute<(attr
   Ty<"cir::MethodType">:$type,
   StdOptionalAttribute<"mlir::FlatSymbolRefAttr">:$symbol,
-  OptionalInt<"uint64_t">:$vtable_offset
+  OptionalInt<"uint64_t">:$vtable_offset,
+  OptionalSignedInt<"int32_t">:$nv_offset,
+  OptionalSignedInt<"int32_t">:$vbptr_offset,
+  OptionalSignedInt<"int32_t">:$vbtable_offset
 )> {
   let cBuilder = "$_resultType::getChecked([&]() { return reader.emitError(); }, context, $_args)";
 }
+
 
 def CIRDialectAttributes : DialectAttributes<"CIR"> {
   let elems = [

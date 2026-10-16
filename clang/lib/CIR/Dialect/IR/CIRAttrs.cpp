@@ -721,7 +721,10 @@ DataMemberAttr::verify(function_ref<InFlightDiagnostic()> emitError,
 LogicalResult MethodAttr::verify(function_ref<InFlightDiagnostic()> emitError,
                                  cir::MethodType type,
                                  std::optional<FlatSymbolRefAttr> symbol,
-                                 std::optional<uint64_t> vtable_offset) {
+                                 std::optional<uint64_t> vtable_offset,
+                                 std::optional<int32_t> nv_offset,
+                                 std::optional<int32_t> vbptr_offset,
+                                 std::optional<int32_t> vbtable_offset) {
   if (symbol.has_value() && vtable_offset.has_value())
     return emitError()
            << "at most one of symbol and vtable_offset can be present "
@@ -736,39 +739,66 @@ Attribute MethodAttr::parse(AsmParser &parser, Type odsType) {
   if (parser.parseLess().failed())
     return {};
 
+  std::optional<FlatSymbolRefAttr> symbol;
+  std::optional<uint64_t> vtableOffset;
+
   // Try to parse the null pointer constant.
   if (parser.parseOptionalKeyword("null").succeeded()) {
-    if (parser.parseGreater().failed())
+    // Null pointer constant.
+  } else if (parser.parseOptionalKeyword("vtable_offset").succeeded()) {
+    if (parser.parseEqual())
       return {};
-    return get(ty);
+    uint64_t offset = 0;
+    if (parser.parseInteger(offset))
+      return {};
+    vtableOffset = offset;
+  } else {
+    // Try to parse a flat symbol ref for a pointer to member function.
+    FlatSymbolRefAttr symAttr;
+    mlir::OptionalParseResult parseSymbolRefResult =
+        parser.parseOptionalAttribute(symAttr);
+    if (!parseSymbolRefResult.has_value() ||
+        parseSymbolRefResult.value().failed())
+      return {};
+    symbol = symAttr;
   }
 
-  // Try to parse a flat symbol ref for a pointer to non-virtual member
-  // function.
-  FlatSymbolRefAttr symbol;
-  mlir::OptionalParseResult parseSymbolRefResult =
-      parser.parseOptionalAttribute(symbol);
-  if (parseSymbolRefResult.has_value()) {
-    if (parseSymbolRefResult.value().failed())
+  std::optional<int32_t> nvOffset;
+  std::optional<int32_t> vbptrOffset;
+  std::optional<int32_t> vbtableOffset;
+
+  while (parser.parseOptionalComma().succeeded()) {
+    if (parser.parseOptionalKeyword("nv_offset").succeeded()) {
+      if (parser.parseEqual())
+        return {};
+      int32_t val = 0;
+      if (parser.parseInteger(val))
+        return {};
+      nvOffset = val;
+    } else if (parser.parseOptionalKeyword("vbptr_offset").succeeded()) {
+      if (parser.parseEqual())
+        return {};
+      int32_t val = 0;
+      if (parser.parseInteger(val))
+        return {};
+      vbptrOffset = val;
+    } else if (parser.parseOptionalKeyword("vbtable_offset").succeeded()) {
+      if (parser.parseEqual())
+        return {};
+      int32_t val = 0;
+      if (parser.parseInteger(val))
+        return {};
+      vbtableOffset = val;
+    } else {
       return {};
-    if (parser.parseGreater().failed())
-      return {};
-    return get(ty, symbol);
+    }
   }
 
-  // Parse a uint64 that represents the vtable offset.
-  std::uint64_t vtableOffset = 0;
-  if (parser.parseKeyword("vtable_offset"))
-    return {};
-  if (parser.parseEqual())
-    return {};
-  if (parser.parseInteger(vtableOffset))
+  if (parser.parseGreater().failed())
     return {};
 
-  if (parser.parseGreater())
-    return {};
-
-  return get(ty, vtableOffset);
+  return get(parser.getContext(), ty, symbol, vtableOffset, nvOffset,
+             vbptrOffset, vbtableOffset);
 }
 
 void MethodAttr::print(AsmPrinter &printer) const {
@@ -783,6 +813,14 @@ void MethodAttr::print(AsmPrinter &printer) const {
   } else {
     printer << "null";
   }
+
+  if (getNvOffset().has_value())
+    printer << ", nv_offset = " << *getNvOffset();
+  if (getVbptrOffset().has_value())
+    printer << ", vbptr_offset = " << *getVbptrOffset();
+  if (getVbtableOffset().has_value())
+    printer << ", vbtable_offset = " << *getVbtableOffset();
+
   printer << '>';
 }
 
