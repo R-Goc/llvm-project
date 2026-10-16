@@ -76,6 +76,14 @@ public:
     return *llvm::cast<clang::ItaniumVTableContext>(vtContext);
   }
 
+  clang::MicrosoftVTableContext &getMicrosoftVTableContext() {
+    return *llvm::cast<clang::MicrosoftVTableContext>(vtContext);
+  }
+
+  const clang::MicrosoftVTableContext &getMicrosoftVTableContext() const {
+    return *llvm::cast<clang::MicrosoftVTableContext>(vtContext);
+  }
+
   /// Generate a construction vtable for the given base subobject.
   cir::GlobalOp
   generateConstructionVTable(const CXXRecordDecl *rd, const BaseSubobject &base,
