@@ -20,12 +20,12 @@ int foo(A a, ...) {
   return sum;
 }
 
-// X64-LABEL: cir.func no_inline dso_local @"?foo@@YAHUA@@ZZ"(%arg0: !rec_A
+// X64-LABEL: cir.func no_inline dso_local @"?foo@@YAHUA@@ZZ"(%arg0: !cir.ptr<!rec_A>
 // X64:   cir.va_start
 // X64:   cir.va_arg
 // X64:   cir.va_end
 // X64:   cleanup normal
-// X64:   cir.call @"??1A@@QEAA@XZ"(%{{.*}})
+// X64:   cir.call @"??1A@@QEAA@XZ"(%arg0)
 
 // X86-LABEL: cir.func no_inline dso_local @"?foo@@YAHUA@@ZZ"(%arg0: !rec_A
 // X86:   cir.va_start

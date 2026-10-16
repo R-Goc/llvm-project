@@ -1,0 +1,85 @@
+// RUN: cir-opt %s -cir-call-conv-lowering="target=x86_64-win64" | FileCheck %s
+
+!s32i = !cir.int<s, 32>
+!s64i = !cir.int<s, 64>
+
+!rec_S12 = !cir.struct<"S12" {data !s32i, data !s32i, data !s32i}>
+!rec_S16 = !cir.struct<"S16" {data !s64i, data !s64i}>
+
+module attributes {
+  cir.triple = "x86_64-unknown-windows-msvc",
+  dlti.dl_spec = #dlti.dl_spec<
+    #dlti.dl_entry<i32, dense<32>: vector<2xi64>>,
+    #dlti.dl_entry<i64, dense<64>: vector<2xi64>>>
+} {
+
+  // A 12-byte struct return uses an sret pointer argument and returns void.
+  cir.func @ret_s12() -> !rec_S12 {
+    %0 = cir.alloca "__retval" align(4) : !cir.ptr<!rec_S12>
+    %z = cir.const #cir.zero : !rec_S12
+    cir.store %z, %0 : !rec_S12, !cir.ptr<!rec_S12>
+    %1 = cir.load %0 : !cir.ptr<!rec_S12>, !rec_S12
+    cir.return %1 : !rec_S12
+  }
+
+  // CHECK-LABEL: cir.func @ret_s12(%arg0: !cir.ptr<!rec_S12> {llvm.align = 4 : i64, llvm.dead_on_unwind, llvm.noalias, llvm.sret = !rec_S12, llvm.writable})
+  // CHECK-NOT:   -> !rec_S12
+  // CHECK:         %[[Z:.*]] = cir.const #cir.zero : !rec_S12
+  // CHECK:         cir.store %[[Z]], %arg0 : !rec_S12, !cir.ptr<!rec_S12>
+  // CHECK:         cir.return
+  // CHECK-NOT:     cir.return %{{.*}}
+
+  // A 16-byte struct return uses an sret pointer argument and returns void.
+  cir.func @ret_s16() -> !rec_S16 {
+    %0 = cir.alloca "__retval" align(8) : !cir.ptr<!rec_S16>
+    %z = cir.const #cir.zero : !rec_S16
+    cir.store %z, %0 : !rec_S16, !cir.ptr<!rec_S16>
+    %1 = cir.load %0 : !cir.ptr<!rec_S16>, !rec_S16
+    cir.return %1 : !rec_S16
+  }
+
+  // CHECK-LABEL: cir.func @ret_s16(%arg0: !cir.ptr<!rec_S16> {llvm.align = 8 : i64, llvm.dead_on_unwind, llvm.noalias, llvm.sret = !rec_S16, llvm.writable})
+  // CHECK-NOT:   -> !rec_S16
+  // CHECK:         %[[Z:.*]] = cir.const #cir.zero : !rec_S16
+  // CHECK:         cir.store %[[Z]], %arg0 : !rec_S16, !cir.ptr<!rec_S16>
+  // CHECK:         cir.return
+  // CHECK-NOT:     cir.return %{{.*}}
+
+  // Structs > 8 bytes are passed as non-byval indirect pointers.
+  cir.func @take_s12(%arg0: !rec_S12) {
+    cir.return
+  }
+
+  // CHECK-LABEL: cir.func @take_s12(%arg0: !cir.ptr<!rec_S12> {llvm.align = 4 : i64, llvm.dereferenceable = 12 : i64, llvm.nofreeobj, llvm.noundef})
+
+  cir.func @take_s16(%arg0: !rec_S16) {
+    cir.return
+  }
+
+  // CHECK-LABEL: cir.func @take_s16(%arg0: !cir.ptr<!rec_S16> {llvm.align = 8 : i64, llvm.dereferenceable = 16 : i64, llvm.nofreeobj, llvm.noundef})
+
+  // Call sites: indirect return passes destination pointer as sret.
+  cir.func @call_ret_s12() {
+    %s = cir.alloca "s" align(4) : !cir.ptr<!rec_S12>
+    %0 = cir.call @ret_s12() : () -> !rec_S12
+    cir.store %0, %s : !rec_S12, !cir.ptr<!rec_S12>
+    cir.return
+  }
+
+  // CHECK-LABEL: cir.func @call_ret_s12()
+  // CHECK:         %[[S:.*]] = cir.alloca "s" align(4) : !cir.ptr<!rec_S12>
+  // CHECK:         cir.call @ret_s12(%[[S]]) : (!cir.ptr<!rec_S12> {llvm.align = 4 : i64, llvm.dead_on_unwind, llvm.sret = !rec_S12, llvm.writable}) -> ()
+  // CHECK:         cir.return
+
+  cir.func @call_ret_s16() {
+    %s = cir.alloca "s" align(8) : !cir.ptr<!rec_S16>
+    %0 = cir.call @ret_s16() : () -> !rec_S16
+    cir.store %0, %s : !rec_S16, !cir.ptr<!rec_S16>
+    cir.return
+  }
+
+  // CHECK-LABEL: cir.func @call_ret_s16()
+  // CHECK:         %[[S:.*]] = cir.alloca "s" align(8) : !cir.ptr<!rec_S16>
+  // CHECK:         cir.call @ret_s16(%[[S]]) : (!cir.ptr<!rec_S16> {llvm.align = 8 : i64, llvm.dead_on_unwind, llvm.sret = !rec_S16, llvm.writable}) -> ()
+  // CHECK:         cir.return
+}

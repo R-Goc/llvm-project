@@ -104,10 +104,13 @@ class CIRGenFunctionInfo final
 
   unsigned numArgs;
 
+  cir::ABIArgInfo returnInfo;
+
   CanQualType *getArgTypes() { return getTrailingObjects(); }
   const CanQualType *getArgTypes() const { return getTrailingObjects(); }
 
-  CIRGenFunctionInfo() : required(RequiredArgs::All) {}
+  CIRGenFunctionInfo()
+      : required(RequiredArgs::All), returnInfo(cir::ABIArgInfo::getDirect()) {}
 
   FunctionType::ExtInfo getExtInfo() const {
     // TODO(cir): as we add this information to this type, we need to add calls
@@ -169,14 +172,8 @@ public:
 
   CanQualType getReturnType() const { return getArgTypes()[0]; }
 
-  cir::ABIArgInfo getReturnInfo() const {
-    assert(!cir::MissingFeatures::abiArgInfo());
-    // TODO(cir): we currently just 'fake' this, but should calculate
-    // this/figure out what it means when we get our ABI info set correctly.
-    // For now, we leave this as a direct return.
-
-    return cir::ABIArgInfo::getDirect();
-  }
+  cir::ABIArgInfo getReturnInfo() const { return returnInfo; }
+  void setReturnInfo(cir::ABIArgInfo info) { returnInfo = info; }
 
   const_arg_iterator argTypesBegin() const { return getArgTypes() + 1; }
   const_arg_iterator argTypesEnd() const { return getArgTypes() + 1 + numArgs; }

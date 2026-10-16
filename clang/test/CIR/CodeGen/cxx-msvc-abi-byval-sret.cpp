@@ -1,4 +1,4 @@
-// RUN: %clang_cc1 -std=c++17 -triple x86_64-pc-windows-msvc -fclangir -emit-cir %s -o %t64.cir
+// RUN: %clang_cc1 -std=c++17 -triple x86_64-pc-windows-msvc -fclangir -fno-clangir-call-conv-lowering -emit-cir %s -o %t64.cir
 // RUN: FileCheck --input-file=%t64.cir %s -check-prefix=X64
 // RUN: %clang_cc1 -std=c++17 -triple i686-pc-windows-msvc -fclangir -emit-cir %s -o %t32.cir
 // RUN: FileCheck --input-file=%t32.cir %s -check-prefix=X86
@@ -27,7 +27,7 @@ struct B {
 // X64:         cir.cleanup.scope {
 // X64:           cir.yield
 // X64:         } cleanup normal {
-// X64:           cir.call @"??1A@@QEAA@XZ"(%[[A_ADDR]]) nothrow : (!cir.ptr<!rec_A>
+// X64:           cir.call @"??1A@@QEAA@XZ"(%[[A_ADDR]]) nothrow{{.*}} : (!cir.ptr<!rec_A>
 // X64:           cir.yield
 // X64:         }
 // X64:         cir.return
@@ -38,7 +38,7 @@ struct B {
 // X86:         cir.cleanup.scope {
 // X86:           cir.yield
 // X86:         } cleanup normal {
-// X86:           cir.call @"??1A@@QAE@XZ"(%[[A_ADDR]]) cc(x86_thiscall) nothrow : (!cir.ptr<!rec_A>
+// X86:           cir.call @"??1A@@QAE@XZ"(%[[A_ADDR]]) cc(x86_thiscall) nothrow{{.*}} : (!cir.ptr<!rec_A>
 // X86:           cir.yield
 // X86:         }
 // X86:         cir.return
@@ -209,29 +209,25 @@ void test_caller_ref() {
 // d) Combination of callee-destructed parameter with indirect struct return (sret)
 // ----------------------------------------------------------------------------
 
-// Function has byval parameter (%arg0).
-// Callee copies to return value, and cleans up byval parameter 'a'.
-// X64-LABEL: cir.func no_inline dso_local @"?pass_and_ret@@YA?AUA@@U1@@Z"(%arg0: !rec_A
-// X64:         %[[RETVAL:.*]] = cir.alloca "__retval" align(4) : !cir.ptr<!rec_A>
+// Function has sret pointer (%arg0) and byval parameter (%arg1).
+// Callee copies to sret, and cleans up byval parameter 'a'.
+// X64-LABEL: cir.func no_inline dso_local @"?pass_and_ret@@YA?AUA@@U1@@Z"(%arg0: !cir.ptr<!rec_A> {{.*}}, %arg1: !rec_A {{.*}})
 // X64:         %[[A_ADDR:.*]] = cir.alloca "a" align(4) init : !cir.ptr<!rec_A>
-// X64:         cir.store %arg0, %[[A_ADDR]] : !rec_A, !cir.ptr<!rec_A>
+// X64:         cir.store %arg1, %[[A_ADDR]] : !rec_A, !cir.ptr<!rec_A>
 // X64:         cir.cleanup.scope {
-// X64:           cir.call @"??0A@@QEAA@AEBU0@@Z"(%[[RETVAL]], %[[A_ADDR]])
-// X64:           %[[RES:.*]] = cir.load %[[RETVAL]] : !cir.ptr<!rec_A>, !rec_A
-// X64:           cir.return %[[RES]] : !rec_A
+// X64:           cir.call @"??0A@@QEAA@AEBU0@@Z"(%arg0, %[[A_ADDR]])
+// X64:           cir.return
 // X64:         } cleanup normal {
 // X64:           cir.call @"??1A@@QEAA@XZ"(%[[A_ADDR]]) nothrow
 // X64:           cir.yield
 // X64:         }
 
-// X86-LABEL: cir.func no_inline dso_local @"?pass_and_ret@@YA?AUA@@U1@@Z"(%arg0: !rec_A
-// X86:         %[[RETVAL:.*]] = cir.alloca "__retval" align(4) : !cir.ptr<!rec_A>
+// X86-LABEL: cir.func no_inline dso_local @"?pass_and_ret@@YA?AUA@@U1@@Z"(%arg0: !cir.ptr<!rec_A> {{.*}}, %arg1: !rec_A {{.*}})
 // X86:         %[[A_ADDR:.*]] = cir.alloca "a" align(4) init : !cir.ptr<!rec_A>
-// X86:         cir.store %arg0, %[[A_ADDR]] : !rec_A, !cir.ptr<!rec_A>
+// X86:         cir.store %arg1, %[[A_ADDR]] : !rec_A, !cir.ptr<!rec_A>
 // X86:         cir.cleanup.scope {
-// X86:           cir.call @"??0A@@QAE@ABU0@@Z"(%[[RETVAL]], %[[A_ADDR]]) cc(x86_thiscall)
-// X86:           %[[RES:.*]] = cir.load %[[RETVAL]] : !cir.ptr<!rec_A>, !rec_A
-// X86:           cir.return %[[RES]] : !rec_A
+// X86:           cir.call @"??0A@@QAE@ABU0@@Z"(%arg0, %[[A_ADDR]]) cc(x86_thiscall)
+// X86:           cir.return
 // X86:         } cleanup normal {
 // X86:           cir.call @"??1A@@QAE@XZ"(%[[A_ADDR]]) cc(x86_thiscall) nothrow
 // X86:           cir.yield
@@ -240,7 +236,7 @@ A pass_and_ret(A a) {
   return a;
 }
 
-// Caller passes byval argument and receives return value.
+// Caller provides sret buffer and passes byval argument.
 // X64-LABEL: cir.func no_inline dso_local @"?test_caller_pass_and_ret@@YAXXZ"()
 // X64:         %[[LOCAL_A:.*]] = cir.alloca "a" align(4) init : !cir.ptr<!rec_A>
 // X64:         %[[RESULT:.*]] = cir.alloca "result" align(4) init : !cir.ptr<!rec_A>
@@ -249,8 +245,7 @@ A pass_and_ret(A a) {
 // X64:         cir.cleanup.scope {
 // X64:           cir.call @"??0A@@QEAA@AEBU0@@Z"(%[[TMP_A]], %[[LOCAL_A]])
 // X64:           %[[VAL_A:.*]] = cir.load align(4) %[[TMP_A]]
-// X64:           %[[CALL_RES:.*]] = cir.call @"?pass_and_ret@@YA?AUA@@U1@@Z"(%[[VAL_A]]) : (!rec_A) -> !rec_A
-// X64:           cir.store align(4) %[[CALL_RES]], %[[RESULT]] : !rec_A, !cir.ptr<!rec_A>
+// X64:           cir.call @"?pass_and_ret@@YA?AUA@@U1@@Z"(%[[RESULT]], %[[VAL_A]]) : (!cir.ptr<!rec_A>, !rec_A) -> ()
 // X64:           cir.cleanup.scope {
 // X64:             cir.yield
 // X64:           } cleanup normal {
@@ -271,8 +266,7 @@ A pass_and_ret(A a) {
 // X86:         cir.cleanup.scope {
 // X86:           cir.call @"??0A@@QAE@ABU0@@Z"(%[[TMP_A]], %[[LOCAL_A]]) cc(x86_thiscall)
 // X86:           %[[VAL_A:.*]] = cir.load align(4) %[[TMP_A]]
-// X86:           %[[CALL_RES:.*]] = cir.call @"?pass_and_ret@@YA?AUA@@U1@@Z"(%[[VAL_A]]) : (!rec_A) -> !rec_A
-// X86:           cir.store align(4) %[[CALL_RES]], %[[RESULT]] : !rec_A, !cir.ptr<!rec_A>
+// X86:           cir.call @"?pass_and_ret@@YA?AUA@@U1@@Z"(%[[RESULT]], %[[VAL_A]]) : (!cir.ptr<!rec_A>, !rec_A) -> ()
 // X86:           cir.cleanup.scope {
 // X86:             cir.yield
 // X86:           } cleanup normal {
@@ -290,39 +284,35 @@ void test_caller_pass_and_ret() {
 }
 
 // ----------------------------------------------------------------------------
-// e) Combination with instance method
+// e) Combination with instance method and sretAfterThis
 // ----------------------------------------------------------------------------
 
 struct S {
   A method(A a);
 };
 
-// Method has 'this' at arg0 and byval 'a' at arg1.
-// X64-LABEL: cir.func no_inline alignment(2) dso_local @"?method@S@@QEAA?AUA@@U2@@Z"(%arg0: !cir.ptr<!rec_S> {{.*}}, %arg1: !rec_A {{.*}}) -> !rec_A
-// X64:         %[[RETVAL:.*]] = cir.alloca "__retval" align(4) : !cir.ptr<!rec_A>
+// Method has 'this' at arg0, 'sret' at arg1, and byval 'a' at arg2.
+// X64-LABEL: cir.func no_inline {{.*}}dso_local @"?method@S@@QEAA?AUA@@U2@@Z"(%arg0: !cir.ptr<!rec_S> {{.*}}, %arg1: !cir.ptr<!rec_A> {{.*}}, %arg2: !rec_A {{.*}})
 // X64:         %[[THIS_ADDR:.*]] = cir.alloca "this" align(8) init : !cir.ptr<!cir.ptr<!rec_S>>
 // X64:         %[[A_ADDR:.*]] = cir.alloca "a" align(4) init : !cir.ptr<!rec_A>
 // X64:         cir.store %arg0, %[[THIS_ADDR]]
-// X64:         cir.store %arg1, %[[A_ADDR]]
+// X64:         cir.store %arg2, %[[A_ADDR]]
 // X64:         cir.cleanup.scope {
-// X64:           cir.call @"??0A@@QEAA@AEBU0@@Z"(%[[RETVAL]], %[[A_ADDR]])
-// X64:           %[[RES:.*]] = cir.load %[[RETVAL]] : !cir.ptr<!rec_A>, !rec_A
-// X64:           cir.return %[[RES]] : !rec_A
+// X64:           cir.call @"??0A@@QEAA@AEBU0@@Z"(%arg1, %[[A_ADDR]])
+// X64:           cir.return
 // X64:         } cleanup normal {
 // X64:           cir.call @"??1A@@QEAA@XZ"(%[[A_ADDR]]) nothrow
 // X64:           cir.yield
 // X64:         }
 
-// X86-LABEL: cir.func no_inline alignment(2) dso_local @"?method@S@@QAE?AUA@@U2@@Z"(%arg0: !cir.ptr<!rec_S> {{.*}}, %arg1: !rec_A {{.*}}) -> !rec_A cc(x86_thiscall)
-// X86:         %[[RETVAL:.*]] = cir.alloca "__retval" align(4) : !cir.ptr<!rec_A>
+// X86-LABEL: cir.func no_inline {{.*}}dso_local @"?method@S@@QAE?AUA@@U2@@Z"(%arg0: !cir.ptr<!rec_S> {{.*}}, %arg1: !cir.ptr<!rec_A> {{.*}}, %arg2: !rec_A {{.*}}) cc(x86_thiscall)
 // X86:         %[[THIS_ADDR:.*]] = cir.alloca "this" align(4) init : !cir.ptr<!cir.ptr<!rec_S>>
 // X86:         %[[A_ADDR:.*]] = cir.alloca "a" align(4) init : !cir.ptr<!rec_A>
 // X86:         cir.store %arg0, %[[THIS_ADDR]]
-// X86:         cir.store %arg1, %[[A_ADDR]]
+// X86:         cir.store %arg2, %[[A_ADDR]]
 // X86:         cir.cleanup.scope {
-// X86:           cir.call @"??0A@@QAE@ABU0@@Z"(%[[RETVAL]], %[[A_ADDR]]) cc(x86_thiscall)
-// X86:           %[[RES:.*]] = cir.load %[[RETVAL]] : !cir.ptr<!rec_A>, !rec_A
-// X86:           cir.return %[[RES]] : !rec_A
+// X86:           cir.call @"??0A@@QAE@ABU0@@Z"(%arg1, %[[A_ADDR]]) cc(x86_thiscall)
+// X86:           cir.return
 // X86:         } cleanup normal {
 // X86:           cir.call @"??1A@@QAE@XZ"(%[[A_ADDR]]) cc(x86_thiscall) nothrow
 // X86:           cir.yield
@@ -331,7 +321,7 @@ A S::method(A a) {
   return a;
 }
 
-// Caller calls method passing 'this' and byval argument.
+// Caller calls method passing 'this', 'sret', and byval argument.
 // X64-LABEL: cir.func no_inline dso_local @"?test_caller_method@@YAXAEAUS@@@Z"(%arg0: !cir.ptr<!rec_S>
 // X64:         %[[S_PTR:.*]] = cir.alloca "s" align(8) init const : !cir.ptr<!cir.ptr<!rec_S>>
 // X64:         %[[LOCAL_A:.*]] = cir.alloca "a" align(4) init : !cir.ptr<!rec_A>
@@ -341,8 +331,7 @@ A S::method(A a) {
 // X64:           %[[LOAD_S:.*]] = cir.load %[[S_PTR]] : !cir.ptr<!cir.ptr<!rec_S>>, !cir.ptr<!rec_S>
 // X64:           cir.call @"??0A@@QEAA@AEBU0@@Z"(%[[TMP_A]], %[[LOCAL_A]])
 // X64:           %[[VAL_A:.*]] = cir.load align(4) %[[TMP_A]]
-// X64:           %[[CALL_RES:.*]] = cir.call @"?method@S@@QEAA?AUA@@U2@@Z"(%[[LOAD_S]], %[[VAL_A]]) : (!cir.ptr<!rec_S> {{.*}}, !rec_A) -> !rec_A
-// X64:           cir.store align(4) %[[CALL_RES]], %[[RESULT]] : !rec_A, !cir.ptr<!rec_A>
+// X64:           cir.call @"?method@S@@QEAA?AUA@@U2@@Z"(%[[LOAD_S]], %[[RESULT]], %[[VAL_A]]){{.*}} : (!cir.ptr<!rec_S> {{.*}}, !cir.ptr<!rec_A>, !rec_A) -> ()
 // X64:           cir.cleanup.scope {
 // X64:             cir.yield
 // X64:           } cleanup normal {
@@ -364,8 +353,7 @@ A S::method(A a) {
 // X86:           %[[LOAD_S:.*]] = cir.load %[[S_PTR]] : !cir.ptr<!cir.ptr<!rec_S>>, !cir.ptr<!rec_S>
 // X86:           cir.call @"??0A@@QAE@ABU0@@Z"(%[[TMP_A]], %[[LOCAL_A]]) cc(x86_thiscall)
 // X86:           %[[VAL_A:.*]] = cir.load align(4) %[[TMP_A]]
-// X86:           %[[CALL_RES:.*]] = cir.call @"?method@S@@QAE?AUA@@U2@@Z"(%[[LOAD_S]], %[[VAL_A]]) cc(x86_thiscall) : (!cir.ptr<!rec_S> {{.*}}, !rec_A) -> !rec_A
-// X86:           cir.store align(4) %[[CALL_RES]], %[[RESULT]] : !rec_A, !cir.ptr<!rec_A>
+// X86:           cir.call @"?method@S@@QAE?AUA@@U2@@Z"(%[[LOAD_S]], %[[RESULT]], %[[VAL_A]]) cc(x86_thiscall){{.*}} : (!cir.ptr<!rec_S> {{.*}}, !cir.ptr<!rec_A>, !rec_A) -> ()
 // X86:           cir.cleanup.scope {
 // X86:             cir.yield
 // X86:           } cleanup normal {

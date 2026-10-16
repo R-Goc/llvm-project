@@ -64,8 +64,8 @@ AssignTest get_rhs();
 // CIR-LABEL: cir.func no_inline dso_local @"?test_assignment@@YAXXZ"()
 void test_assignment() {
   // Assignment operator requires RHS evaluated before LHS.
-  // CIR: cir.call @"?get_rhs@@YA?AUAssignTest@@XZ"()
-  // CIR: cir.call @"?get_lhs@@YA?AUAssignTest@@XZ"()
+  // CIR: cir.call @"?get_rhs@@YA?AUAssignTest@@XZ"(%{{[0-9]+}})
+  // CIR: cir.call @"?get_lhs@@YA?AUAssignTest@@XZ"(%{{[0-9]+}})
   // CIR: cir.call @"??4AssignTest@@QEAAAEAU0@AEBU0@@Z"
   get_lhs() = get_rhs();
 }
