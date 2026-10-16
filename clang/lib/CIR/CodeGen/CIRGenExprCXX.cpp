@@ -769,9 +769,11 @@ static mlir::Value emitCXXNewAllocSize(CIRGenFunction &cgf, const CXXNewExpr *e,
 static RValue emitNewDeleteCall(CIRGenFunction &cgf,
                                 const FunctionDecl *calleeDecl,
                                 const FunctionProtoType *calleeType,
-                                const CallArgList &args) {
+                                const CallArgList &args,
+                                cir::FuncOp calleeOverride = nullptr) {
   cir::CIRCallOpInterface callOrTryCall;
-  cir::FuncOp calleePtr = cgf.cgm.getAddrOfFunction(calleeDecl);
+  cir::FuncOp calleePtr =
+      calleeOverride ? calleeOverride : cgf.cgm.getAddrOfFunction(calleeDecl);
   CIRGenCallee callee =
       CIRGenCallee::forDirect(calleePtr, GlobalDecl(calleeDecl));
   RValue rv = cgf.emitCall(
@@ -1295,8 +1297,9 @@ void CIRGenFunction::emitNewArrayInitializer(
                                cce->requiresZeroInitialization(), endOfInit);
     if (getContext().getTargetInfo().emitVectorDeletingDtors(
             getContext().getLangOpts())) {
-      cgm.errorNYI(e->getSourceRange(),
-                   "emitNewArrayInitializer: emitVectorDeletingDtors");
+      CXXDestructorDecl *dtor = ctor->getParent()->getDestructor();
+      if (dtor && dtor->isVirtual())
+        cgm.requireVectorDestructorDefinition(ctor->getParent());
     }
     return;
   }
@@ -1443,6 +1446,29 @@ static void emitDestroyingObjectDelete(CIRGenFunction &cgf,
   cgf.emitDeleteCall(de->getOperatorDelete(), ptr.getPointer(), elementType);
 }
 
+static const CXXRecordDecl *getCXXRecord(const Expr *e) {
+  QualType ty = e->getType();
+  if (const auto *pt = ty->getAs<PointerType>())
+    ty = pt->getPointeeType();
+  return ty->getAsCXXRecordDecl();
+}
+
+static const CXXDestructorDecl *
+tryDevirtualizeDtorCall(const CXXDeleteExpr *e, const CXXDestructorDecl *dtor,
+                        const LangOptions &lo) {
+  assert(dtor && dtor->isVirtual() && "virtual dtor is expected");
+  const Expr *dBase = e->getArgument();
+  if (auto *maybeDevirtualizedDtor = dyn_cast_or_null<CXXDestructorDecl>(
+          dtor->getDevirtualizedMethod(dBase, lo.AppleKext))) {
+    const CXXRecordDecl *devirtualizedClass =
+        maybeDevirtualizedDtor->getParent();
+    if (declaresSameEntity(getCXXRecord(dBase), devirtualizedClass)) {
+      return maybeDevirtualizedDtor;
+    }
+  }
+  return nullptr;
+}
+
 /// Emit the code for deleting a single object.
 static void emitObjectDelete(CIRGenFunction &cgf, const CXXDeleteExpr *de,
                              Address ptr, QualType elementType) {
@@ -1464,10 +1490,14 @@ static void emitObjectDelete(CIRGenFunction &cgf, const CXXDeleteExpr *de,
       dtor = rd->getDestructor();
 
       if (dtor->isVirtual()) {
-        assert(!cir::MissingFeatures::devirtualizeDestructor());
-        cgf.cgm.getCXXABI().emitVirtualObjectDelete(cgf, de, ptr, elementType,
-                                                    dtor);
-        return;
+        if (const auto *devirtualizedDtor =
+                tryDevirtualizeDtorCall(de, dtor, cgf.getLangOpts())) {
+          dtor = devirtualizedDtor;
+        } else {
+          cgf.cgm.getCXXABI().emitVirtualObjectDelete(cgf, de, ptr, elementType,
+                                                      dtor);
+          return;
+        }
       }
     }
   }
@@ -1491,6 +1521,17 @@ static void emitObjectDelete(CIRGenFunction &cgf, const CXXDeleteExpr *de,
 }
 
 void CIRGenFunction::emitCXXDeleteExpr(const CXXDeleteExpr *e) {
+  if (e->isGlobalDelete() && cgm.getTarget().getCXXABI().isMicrosoft()) {
+    const CXXRecordDecl *rd = e->getDestroyedType()->getAsCXXRecordDecl();
+    if (rd && rd->hasDefinition() && !rd->hasTrivialDestructor()) {
+      cgm.noteDirectGlobalDelete();
+      const FunctionDecl *od = e->getOperatorDelete();
+      assert(!isa<CXXMethodDecl>(od) && "global ::delete should resolve to a "
+                                        "namespace-scope operator delete");
+      cgm.getOrCreateMSVCGlobalDeleteWrapper(od);
+    }
+  }
+
   const Expr *arg = e->getArgument();
   Address ptr = emitPointerWithAlignment(arg);
 
@@ -1532,8 +1573,19 @@ void CIRGenFunction::emitCXXDeleteExpr(const CXXDeleteExpr *e) {
   if (e->isArrayForm() &&
       cgm.getASTContext().getTargetInfo().emitVectorDeletingDtors(
           cgm.getASTContext().getLangOpts())) {
-    cgm.errorNYI(e->getSourceRange(),
-                 "emitCXXDeleteExpr: emitVectorDeletingDtors");
+    if (const auto *rd = deleteTy->getAsCXXRecordDecl()) {
+      if (rd->hasDefinition() && !rd->hasTrivialDestructor()) {
+        const auto *dtor = rd->getDestructor();
+        if (dtor && dtor->isVirtual()) {
+          if (!tryDevirtualizeDtorCall(e, dtor, cgm.getLangOpts())) {
+            cgm.requireVectorDestructorDefinition(rd);
+            cgm.getCXXABI().emitVirtualObjectDelete(*this, e, ptr, deleteTy,
+                                                    dtor);
+            return;
+          }
+        }
+      }
+    }
   }
 
   if (e->isArrayForm()) {
@@ -1846,7 +1898,10 @@ mlir::Value CIRGenFunction::emitCXXNewExpr(const CXXNewExpr *e) {
 }
 
 void CIRGenFunction::emitDeleteCall(const FunctionDecl *deleteFD,
-                                    mlir::Value ptr, QualType deleteTy) {
+                                    mlir::Value ptr, QualType deleteTy,
+                                    mlir::Value numElements,
+                                    CharUnits cookieSize,
+                                    cir::FuncOp calleeOverride) {
   assert(!cir::MissingFeatures::deleteArray());
 
   const auto *deleteFTy = deleteFD->getType()->castAs<FunctionProtoType>();
@@ -1876,16 +1931,30 @@ void CIRGenFunction::emitDeleteCall(const FunctionDecl *deleteFD,
     deleteArgs.add(RValue::getAggregate(tagAddr), tagType);
   }
 
+  mlir::Location loc = currSrcLoc ? getLoc(*currSrcLoc) : ptr.getLoc();
+
   // Pass the size if the delete function has a size_t parameter.
   if (params.Size) {
     QualType sizeType = *paramTypeIter;
     std::advance(paramTypeIter, 1);
     CharUnits deleteTypeSize = getContext().getTypeSizeInChars(deleteTy);
-    assert(mlir::isa<cir::IntType>(convertType(sizeType)) &&
-           "expected cir::IntType");
-    cir::ConstantOp size =
-        builder.getConstInt(getLoc(*currSrcLoc), convertType(sizeType),
-                            deleteTypeSize.getQuantity());
+    mlir::Type cirSizeType = convertType(sizeType);
+    assert(mlir::isa<cir::IntType>(cirSizeType) && "expected cir::IntType");
+
+    mlir::Value size =
+        builder.getConstInt(loc, cirSizeType, deleteTypeSize.getQuantity());
+
+    if (numElements) {
+      if (numElements.getType() != cirSizeType)
+        numElements = builder.createIntCast(numElements, cirSizeType);
+      size = builder.createMul(loc, size, numElements);
+    }
+
+    if (!cookieSize.isZero()) {
+      mlir::Value cookieSizeVal =
+          builder.getConstInt(loc, cirSizeType, cookieSize.getQuantity());
+      size = builder.createAdd(loc, size, cookieSizeVal);
+    }
 
     deleteArgs.add(RValue::get(size), sizeType);
   }
@@ -1896,8 +1965,8 @@ void CIRGenFunction::emitDeleteCall(const FunctionDecl *deleteFD,
     CharUnits deleteTypeAlign =
         getContext().toCharUnitsFromBits(getContext().getTypeAlignIfKnown(
             deleteTy, /*NeedsPreferredAlignment=*/true));
-    cir::ConstantOp align = builder.getAlignment(
-        getLoc(*currSrcLoc), convertType(alignValType), deleteTypeAlign);
+    cir::ConstantOp align =
+        builder.getAlignment(loc, convertType(alignValType), deleteTypeAlign);
     deleteArgs.add(RValue::get(align), alignValType);
   }
 
@@ -1905,7 +1974,7 @@ void CIRGenFunction::emitDeleteCall(const FunctionDecl *deleteFD,
          "unknown parameter to usual delete function");
 
   // Emit the call to delete.
-  emitNewDeleteCall(*this, deleteFD, deleteFTy, deleteArgs);
+  emitNewDeleteCall(*this, deleteFD, deleteFTy, deleteArgs, calleeOverride);
 }
 
 static mlir::Value emitDynamicCastToNull(CIRGenFunction &cgf,

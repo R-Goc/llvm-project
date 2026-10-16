@@ -213,6 +213,10 @@ public:
                                        QualType elementType,
                                        const CXXDestructorDecl *dtor) = 0;
 
+  virtual void emitConditionalArrayDtorCall(CIRGenFunction &cgf,
+                                            const CXXDestructorDecl *dd,
+                                            mlir::Value shouldDeleteCondition);
+
   virtual size_t getSrcArgforCopyCtor(const CXXConstructorDecl *,
                                       FunctionArgList &args) const = 0;
 
@@ -389,6 +393,12 @@ public:
                                         const CXXNewExpr *e,
                                         QualType elementType) = 0;
 
+  /// Reads the array cookie for an allocation which is being deallocated.
+  /// Assumes that an array cookie is required.
+  virtual void readArrayCookie(CIRGenFunction &cgf, Address ptr, QualType eltTy,
+                               mlir::Value &numElements, mlir::Value &allocPtr,
+                               CharUnits &cookieSize);
+
   /// Return true if the given member pointer can be zero-initialized
   /// (in the C++ sense).
   virtual bool isZeroInitializable(const MemberPointerType *mpt) = 0;
@@ -398,6 +408,9 @@ protected:
   /// cookie for the given type.  Assumes that an array cookie is
   /// required.
   virtual CharUnits getArrayCookieSizeImpl(QualType elementType) = 0;
+
+  virtual mlir::Value readArrayCookieImpl(CIRGenFunction &cgf, Address ptr,
+                                          CharUnits cookieSize);
 };
 
 /// Creates and Itanium-family ABI

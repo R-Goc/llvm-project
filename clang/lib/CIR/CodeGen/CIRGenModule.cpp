@@ -2736,8 +2736,7 @@ std::pair<cir::FuncType, cir::FuncOp> CIRGenModule::getAddrAndTypeOfCXXStructor(
     if (getTarget().getCXXABI().isMicrosoft() &&
         gd.getDtorType() == Dtor_Complete &&
         md->getParent()->getNumVBases() == 0)
-      errorNYI(md->getSourceRange(),
-               "getAddrAndTypeOfCXXStructor: MS ABI complete destructor");
+      gd = gd.getWithDtorType(Dtor_Base);
   }
 
   if (!fnType) {
@@ -2772,8 +2771,7 @@ cir::FuncOp CIRGenModule::getAddrOfFunction(clang::GlobalDecl gd,
     if (getTarget().getCXXABI().isMicrosoft() &&
         gd.getDtorType() == Dtor_Complete &&
         dd->getParent()->getNumVBases() == 0)
-      errorNYI(dd->getSourceRange(),
-               "getAddrOfFunction: MS ABI complete destructor");
+      gd = gd.getWithDtorType(Dtor_Base);
   }
 
   StringRef mangledName = getMangledName(gd);
@@ -3776,8 +3774,7 @@ cir::FuncOp CIRGenModule::getOrCreateCIRFunction(
   if (isa_and_nonnull<CXXDestructorDecl>(d) &&
       getCXXABI().useThunkForDtorVariant(cast<CXXDestructorDecl>(d),
                                          gd.getDtorType()))
-    errorNYI(d->getSourceRange(),
-             "getOrCreateCIRFunction: MSVC non-base destructor thunk");
+    addDeferredDeclToEmit(gd);
 
   // This is the first use or definition of a mangled name. If there is a
   // deferred decl with this name, remember that we need to emit it at the end
@@ -4081,6 +4078,7 @@ void CIRGenModule::release() {
   if (astContext.getLangOpts().CUDA && cudaRuntime)
     getCUDARuntime().finalizeModule();
 
+  emitGlobalDeleteForwardingBodies();
   emitLLVMUsed();
 
   // Precompute the mangled C++20 named-module initializer function name and
@@ -4636,4 +4634,144 @@ void CIRGenModule::emitGlobalAnnotations() {
       addGlobalAnnotations(vd, gv);
   }
   deferredAnnotations.clear();
+}
+
+bool CIRGenModule::classNeedsVectorDestructor(const CXXRecordDecl *rd) {
+  if (!getASTContext().getTargetInfo().emitVectorDeletingDtors(
+          getASTContext().getLangOpts()))
+    return false;
+  CXXDestructorDecl *dtor = rd->getDestructor();
+  if (dtor && dtor->isVirtual() && dtor->hasAttr<DLLExportAttr>())
+    return true;
+
+  return requireVectorDeletingDtor.count(rd);
+}
+
+void CIRGenModule::requireVectorDestructorDefinition(const CXXRecordDecl *rd) {
+  if (!getASTContext().getTargetInfo().emitVectorDeletingDtors(
+          getASTContext().getLangOpts()))
+    return;
+  if (!requireVectorDeletingDtor.insert(rd).second)
+    return;
+
+  CXXDestructorDecl *dtorD = rd->getDestructor();
+  if (!dtorD || !dtorD->isVirtual())
+    return;
+
+  GlobalDecl scalarDtorGD(dtorD, Dtor_Deleting);
+  StringRef mangledName = getMangledName(scalarDtorGD);
+  mlir::Operation *entry = getGlobalValue(mangledName);
+  GlobalDecl vectorDtorGD(dtorD, Dtor_VectorDeleting);
+  if (entry) {
+    if (auto cirFunc = dyn_cast<cir::FuncOp>(entry)) {
+      if (!cirFunc.isDeclaration()) {
+        StringRef vdName = getMangledName(vectorDtorGD);
+        mlir::Operation *vdEntry = getGlobalValue(vdName);
+        if (vdEntry) {
+          if (auto vdFunc = dyn_cast<cir::FuncOp>(vdEntry)) {
+            if (vdFunc.getAliasee().has_value()) {
+              eraseGlobalSymbol(vdEntry);
+              vdEntry->erase();
+              eraseGlobalSymbol(entry);
+              entry->erase();
+              addDeferredDeclToEmit(vectorDtorGD);
+              addDeferredDeclToEmit(scalarDtorGD);
+              return;
+            }
+          }
+        }
+      }
+    }
+  }
+  addDeferredDeclToEmit(vectorDtorGD);
+}
+
+cir::FuncOp
+CIRGenModule::getOrCreateMSVCGlobalDeleteWrapper(const FunctionDecl *globOD) {
+  assert(getTarget().getCXXABI().isMicrosoft() &&
+         "__global_delete wrapper is only used with the Microsoft ABI");
+
+  cir::FuncOp globDeleteFn = getAddrOfFunction(globOD);
+  StringRef globDeleteMangledName = globDeleteFn.getName();
+  StringRef signature;
+  const char *wrapperBase = nullptr;
+  if (globDeleteMangledName.starts_with("??3@")) {
+    signature = globDeleteMangledName.substr(4);
+    wrapperBase = "?__global_delete@@";
+  } else if (globDeleteMangledName.starts_with("??_V@")) {
+    signature = globDeleteMangledName.substr(5);
+    wrapperBase = "?__global_array_delete@@";
+  } else {
+    llvm_unreachable("unexpected global operator delete mangling");
+  }
+
+  std::string globalDeleteName = (wrapperBase + signature).str();
+  std::string emptyGlobalDeleteName =
+      ("?__empty_global_delete@@" + signature).str();
+
+  if (mlir::Operation *existing = getGlobalValue(globalDeleteName))
+    return cast<cir::FuncOp>(existing);
+
+  mlir::Location loc = globOD->getLocation().isValid()
+                           ? getLoc(globOD->getLocation())
+                           : theModule->getLoc();
+  cir::FuncType fnTy = globDeleteFn.getFunctionType();
+
+  // Create the shared __empty_global_delete fallback if it doesn't already
+  // exist.
+  cir::FuncOp emptyFn =
+      cast_or_null<cir::FuncOp>(getGlobalValue(emptyGlobalDeleteName));
+  if (!emptyFn) {
+    emptyFn = createCIRFunction(loc, emptyGlobalDeleteName, fnTy, globOD);
+    emptyFn.setLinkage(cir::GlobalLinkageKind::LinkOnceODRLinkage);
+    emptyFn.setSelfComdat();
+
+    // Body of __empty_global_delete: trap and unreachable.
+    mlir::Block *entryBlock = emptyFn.addEntryBlock();
+    mlir::OpBuilder::InsertionGuard guard(builder);
+    builder.setInsertionPointToEnd(entryBlock);
+    cir::TrapOp::create(builder, loc);
+
+    addUsedGlobal(emptyFn);
+  }
+
+  // Create wrapper alias defaulting to a weak alias to __empty_global_delete.
+  cir::FuncOp globalDeleteAlias =
+      createCIRFunction(loc, globalDeleteName, fnTy, globOD);
+  globalDeleteAlias.setAliasee(emptyGlobalDeleteName);
+  globalDeleteAlias.setLinkage(cir::GlobalLinkageKind::WeakAnyLinkage);
+
+  pendingMSVCGlobalDeletes.push_back({globalDeleteAlias, globOD});
+  return globalDeleteAlias;
+}
+
+void CIRGenModule::emitGlobalDeleteForwardingBodies() {
+  if (!hasDirectGlobalDelete)
+    return;
+
+  for (const auto &entry : pendingMSVCGlobalDeletes) {
+    cir::FuncOp alias = entry.first;
+    const FunctionDecl *operatorDeleteFD = entry.second;
+    cir::FuncOp realDeleteFn = getAddrOfFunction(operatorDeleteFD);
+
+    // Upgrade the weak alias into a strong forwarding body with linkonce_odr
+    // and comdat.
+    alias->removeAttr("aliasee");
+    alias.setLinkage(cir::GlobalLinkageKind::LinkOnceODRLinkage);
+    alias.setSelfComdat();
+
+    mlir::Location loc = operatorDeleteFD->getLocation().isValid()
+                             ? getLoc(operatorDeleteFD->getLocation())
+                             : theModule->getLoc();
+    mlir::Block *entryBlock = alias.addEntryBlock();
+    mlir::OpBuilder::InsertionGuard guard(builder);
+    builder.setInsertionPointToEnd(entryBlock);
+
+    SmallVector<mlir::Value, 4> args;
+    for (auto arg : entryBlock->getArguments())
+      args.push_back(arg);
+
+    builder.createCallOp(loc, realDeleteFn, args);
+    cir::ReturnOp::create(builder, loc);
+  }
 }
