@@ -57,7 +57,7 @@ public:
 
   AddedStructorArgCounts
   buildStructorSignature(GlobalDecl gd,
-                         llvm::SmallVectorImpl<CanQualType> &argTys) override;
+                         SmallVectorImpl<CanQualType> &argTys) override;
 
   void emitInstanceFunctionProlog(SourceLocation loc,
                                   CIRGenFunction &cgf) override;
@@ -276,7 +276,7 @@ void CIRGenItaniumCXXABI::emitInstanceFunctionProlog(SourceLocation loc,
 
 CIRGenCXXABI::AddedStructorArgCounts
 CIRGenItaniumCXXABI::buildStructorSignature(
-    GlobalDecl gd, llvm::SmallVectorImpl<CanQualType> &argTys) {
+    GlobalDecl gd, SmallVectorImpl<CanQualType> &argTys) {
   clang::ASTContext &astContext = cgm.getASTContext();
 
   // All parameters are already in place except VTT, which goes after 'this'.
