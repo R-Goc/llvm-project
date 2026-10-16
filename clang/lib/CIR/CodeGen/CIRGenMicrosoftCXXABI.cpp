@@ -15,6 +15,7 @@
 
 #include "CIRGenCXXABI.h"
 #include "CIRGenFunction.h"
+#include "CIRGenFunctionInfo.h"
 #include "CIRGenModule.h"
 
 #include "clang/AST/Attr.h"
@@ -41,6 +42,7 @@ public:
 
   bool hasMostDerivedReturn(GlobalDecl gd) const override { return false; }
 
+  bool classifyReturnType(CIRGenFunctionInfo &fi) const override;
   StringRef getPureVirtualCallName() override { return "_purecall"; }
   StringRef getDeletedVirtualCallName() override { return "_purecall"; }
 
@@ -299,6 +301,53 @@ public:
 
 } // namespace
 
+static bool isTrivialForMSVC(const CXXRecordDecl *rd) {
+  if (rd->hasProtectedFields() || rd->hasPrivateFields())
+    return false;
+  if (rd->getNumBases() > 0)
+    return false;
+  if (rd->isPolymorphic())
+    return false;
+  if (rd->hasNonTrivialCopyAssignment())
+    return false;
+  if (rd->needsImplicitCopyAssignment() && !rd->hasSimpleCopyAssignment())
+    return false;
+  for (const Decl *d : rd->decls()) {
+    if (const auto *ctor = dyn_cast<CXXConstructorDecl>(d)) {
+      if (ctor->isUserProvided())
+        return false;
+    } else if (const auto *tpl = dyn_cast<FunctionTemplateDecl>(d)) {
+      if (isa<CXXConstructorDecl>(tpl->getTemplatedDecl()))
+        return false;
+    } else if (const auto *methodDecl = dyn_cast<CXXMethodDecl>(d)) {
+      if (methodDecl->isCopyAssignmentOperator() && methodDecl->isDeleted())
+        return false;
+    }
+  }
+  if (rd->hasNonTrivialDestructor())
+    return false;
+  return true;
+}
+
+bool CIRGenMicrosoftCXXABI::classifyReturnType(CIRGenFunctionInfo &fi) const {
+  const CXXRecordDecl *rd = fi.getReturnType()->getAsCXXRecordDecl();
+  if (!rd)
+    return false;
+
+  bool isTrivialForABI = rd->canPassInRegisters() && isTrivialForMSVC(rd);
+  bool isIndirectReturn = !isTrivialForABI || fi.isInstanceMethod();
+
+  if (isIndirectReturn) {
+    CharUnits align =
+        cgm.getASTContext().getTypeAlignInChars(fi.getReturnType());
+    auto returnInfo =
+        cir::ABIArgInfo::getIndirect(align, /*addrSpace=*/0, /*byVal=*/false);
+    returnInfo.setSRetAfterThis(fi.isInstanceMethod());
+    fi.setReturnInfo(returnInfo);
+    return true;
+  }
+  return false;
+}
 CIRGenCXXABI *clang::CIRGen::CreateCIRGenMicrosoftCXXABI(CIRGenModule &cgm) {
   return new CIRGenMicrosoftCXXABI(cgm);
 }

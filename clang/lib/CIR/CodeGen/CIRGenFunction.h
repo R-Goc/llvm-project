@@ -2059,14 +2059,6 @@ public:
   void emitCallAndReturnForThunk(cir::FuncOp callee, SourceRange fnLoc,
                                  const ThunkInfo *thunk, bool isUnprototyped);
 
-  enum class EvaluationOrder {
-    /// No language constraints on evaluation order.
-    Default,
-    /// Language semantics require left-to-right evaluation.
-    ForceLeftToRight,
-    /// Language semantics require right-to-left evaluation.
-    ForceRightToLeft
-  };
 
   void emitCallArg(CallArgList &args, const clang::Expr *e,
                    clang::QualType argType);

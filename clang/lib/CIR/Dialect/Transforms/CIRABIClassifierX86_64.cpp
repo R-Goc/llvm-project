@@ -6,8 +6,8 @@
 //
 //===----------------------------------------------------------------------===//
 //
-// This file implements the x86_64 System V classifier, which classifies with
-// the LLVM ABI Lowering Library's SysV x86_64 target.
+// This file implements the x86_64 System V and Win64 classifiers, which
+// classify with the LLVM ABI Lowering Library's x86_64 targets.
 //
 //===----------------------------------------------------------------------===//
 
@@ -26,15 +26,20 @@ namespace {
 class X86_64ABIClassifier final : public CIRABIClassifierCommon {
 public:
   X86_64ABIClassifier(const mlir::DataLayout &dl, mlir::ModuleOp modOp,
-                      const ABIClassifierOptions &options)
+                      const ABIClassifierOptions &options, bool isWin64 = false)
       : CIRABIClassifierCommon(dl, modOp), baseAvxLevel(options.x86AvxAbiLevel),
         allowsTargetAttrAvx(options.allowsX86TargetAttrAvx),
-        abiCompat(options.x86AbiCompat) {}
+        abiCompat(options.x86AbiCompat), isWin64(isWin64) {}
 
   /// cir.va_arg is expanded into the SysV register-save-area / overflow-area
   /// sequence, which reads the fetched type's classification as an unnamed
   /// argument, as classic's X86_64ABIInfo::EmitVAArg does.
   std::optional<ArgClassification> classifyVAArg(cir::VAArgOp vaArg) override {
+    if (isWin64) {
+      vaArg->emitOpError()
+          << "Win64 va_arg is not handled through classifyVAArg";
+      return std::nullopt;
+    }
     return classifyVarArgType(
         vaArg.getType(), getTargetInfo(vaArg->getParentOfType<cir::FuncOp>()),
         [&]() { return vaArg->emitOpError(); });
@@ -59,6 +64,7 @@ private:
   /// The x86_64 flags whose value depends on the target and the requested ABI
   /// compatibility version.
   llvm::abi::X86ABICompatInfo abiCompat;
+  bool isWin64 = false;
 };
 
 const llvm::abi::TargetInfo &
@@ -71,10 +77,15 @@ X86_64ABIClassifier::getTargetInfo(cir::FuncOp featureSource) {
          "a new X86AVXABILevel must move X86AVXABILevel::Last");
   std::unique_ptr<llvm::abi::TargetInfo> &slot =
       targets[static_cast<unsigned>(level)];
-  if (!slot)
-    slot =
-        llvm::abi::createX86_64TargetInfo(typeMapper.getTypeBuilder(), level,
-                                          /*Has64BitPointers=*/true, abiCompat);
+  if (!slot) {
+    if (isWin64)
+      slot = llvm::abi::createWinX86_64TargetInfo(
+          typeMapper.getTypeBuilder(), level, abiCompat);
+    else
+      slot = llvm::abi::createX86_64TargetInfo(
+          typeMapper.getTypeBuilder(), level,
+          /*Has64BitPointers=*/true, abiCompat);
+  }
   return *slot;
 }
 
@@ -83,5 +94,14 @@ X86_64ABIClassifier::getTargetInfo(cir::FuncOp featureSource) {
 std::unique_ptr<CIRABIClassifier>
 cir::createX86_64ABIClassifier(const mlir::DataLayout &dl, mlir::ModuleOp modOp,
                                const ABIClassifierOptions &options) {
-  return std::make_unique<X86_64ABIClassifier>(dl, modOp, options);
+  return std::make_unique<X86_64ABIClassifier>(dl, modOp, options,
+                                               /*isWin64=*/false);
+}
+
+std::unique_ptr<CIRABIClassifier>
+cir::createWinX86_64ABIClassifier(const mlir::DataLayout &dl,
+                                  mlir::ModuleOp modOp,
+                                  const ABIClassifierOptions &options) {
+  return std::make_unique<X86_64ABIClassifier>(dl, modOp, options,
+                                               /*isWin64=*/true);
 }

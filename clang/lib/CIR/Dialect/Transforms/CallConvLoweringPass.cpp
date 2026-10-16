@@ -666,10 +666,13 @@ convertABIArgInfo(const llvm::abi::ArgInfo &info, MLIRContext *ctx,
   if (info.isIndirectAliased() ||
       (info.isIndirect() && info.getIndirectAddrSpace() != 0))
     return std::nullopt;
-  if (info.isIndirect())
-    return ArgClassification::getIndirect(info.getIndirectAlign(),
-                                          info.getIndirectByVal(),
-                                          info.getIndirectAddrSpace());
+  if (info.isIndirect()) {
+    auto ac = ArgClassification::getIndirect(info.getIndirectAlign(),
+                                             info.getIndirectByVal(),
+                                             info.getIndirectAddrSpace());
+    ac.sretAfterThis = info.isSRetAfterThis();
+    return ac;
+  }
   // AArch64 pure scalable aggregates use CoerceAndExpand. This bridge lowers
   // x86_64 classifications only.
   assert(!info.isCoerceAndExpand() &&
@@ -700,7 +703,8 @@ llvm::abi::RequiredArgs cir::requiredArgs(cir::FuncType fnTy) {
 std::optional<FunctionClassification> CIRABIClassifierCommon::classifySignature(
     mlir::Type retCIR, mlir::TypeRange inputs, llvm::abi::RequiredArgs required,
     const llvm::abi::TargetInfo &targetInfo, llvm::CallingConv::ID callConv,
-    llvm::function_ref<mlir::InFlightDiagnostic()> emitError) {
+    llvm::function_ref<mlir::InFlightDiagnostic()> emitError,
+    bool isInstanceMethod) {
   assert(retCIR && "signature return type must be non-null");
   assert((!required.allowsOptionalArgs() ||
           required.getNumRequiredArgs() <= inputs.size()) &&
@@ -730,6 +734,7 @@ std::optional<FunctionClassification> CIRABIClassifierCommon::classifySignature(
 
   std::unique_ptr<llvm::abi::FunctionInfo> fi =
       llvm::abi::FunctionInfo::create(callConv, retAbi, argAbi, required);
+  fi->setIsInstanceMethod(isInstanceMethod);
   targetInfo.computeInfo(*fi);
 
   // convertABIArgInfo returns nullopt when the classifier picks a coercion this
@@ -797,10 +802,12 @@ llvm::abi::X86AVXABILevel cir::funcAvxLevel(cir::FuncOp func,
 std::optional<FunctionClassification>
 CIRABIClassifierCommon::classifyFunction(cir::FuncOp func) {
   cir::FuncType fnTy = func.getFunctionType();
+  bool isInstanceMethod = func->hasAttr("cir.instance_method");
   return classifySignature(fnTy.getReturnType(), fnTy.getInputs(),
                            requiredArgs(fnTy), getTargetInfo(func),
                            convertCallingConv(func.getCallingConv()),
-                           [&]() { return func.emitOpError(); });
+                           [&]() { return func.emitOpError(); },
+                           isInstanceMethod);
 }
 
 /// Classify the single type fetched by a `cir.va_arg` as an unnamed argument
@@ -832,10 +839,12 @@ CIRABIClassifierCommon::classifyVariadicCall(
   assert(calleeTy.isVarArg() &&
          "only a variadic callee can take more operands than it declares");
   Operation *op = call.getOperation();
+  bool isInstanceMethod = op->hasAttr("cir.instance_method");
   return classifySignature(calleeTy.getReturnType(),
                            call.getArgOperands().getTypes(),
                            requiredArgs(calleeTy), targetInfo, callConv,
-                           [&]() { return op->emitOpError(); });
+                           [&]() { return op->emitOpError(); },
+                           isInstanceMethod);
 }
 
 /// Whether \p fc gives the callee access to memory through a pointer the ABI
@@ -960,6 +969,8 @@ createABIClassifier(cir::CallConvTarget target,
     return createTestTargetABIClassifier(dl);
   case cir::CallConvTarget::X86_64:
     return createX86_64ABIClassifier(dl, modOp, options);
+  case cir::CallConvTarget::X86_64_Win64:
+    return createWinX86_64ABIClassifier(dl, modOp, options);
   case cir::CallConvTarget::AMDGPU:
     return createAMDGPUABIClassifier(dl, modOp);
   case cir::CallConvTarget::None:

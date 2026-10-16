@@ -45,11 +45,13 @@ CIRABIClassifierCommon::classifyIndirectCall(cir::CIRCallOpInterface call) {
       getTargetInfo(call->getParentOfType<cir::FuncOp>());
   // An indirect callee is an ordinary function pointer, so it uses the C
   // convention.
+  bool isInstanceMethod = call.getOperation()->hasAttr("cir.instance_method");
   if (call.getNumArgOperands() > funcTy.getNumInputs())
     return classifyVariadicCall(call, funcTy, targetInfo, llvm::CallingConv::C);
   return classifySignature(
       funcTy.getReturnType(), funcTy.getInputs(), requiredArgs(funcTy),
-      targetInfo, llvm::CallingConv::C, [&]() { return call->emitOpError(); });
+      targetInfo, llvm::CallingConv::C, [&]() { return call->emitOpError(); },
+      isInstanceMethod);
 }
 
 namespace {

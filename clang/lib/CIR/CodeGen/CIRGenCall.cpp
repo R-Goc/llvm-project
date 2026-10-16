@@ -46,6 +46,7 @@ CIRGenFunctionInfo::create(cir::CallingConv cirCC, FunctionType::ExtInfo info,
   fi->astCallingConvention = info.getCC();
   fi->noReturn = info.getNoReturn();
   fi->instanceMethod = isInstanceMethod;
+  fi->returnInfo = cir::ABIArgInfo::getDirect();
 
   fi->required = required;
   fi->numArgs = argTypes.size();
@@ -71,13 +72,23 @@ cir::FuncType CIRGenTypes::getFunctionType(GlobalDecl gd) {
 }
 
 cir::FuncType CIRGenTypes::getFunctionType(const CIRGenFunctionInfo &info) {
-  mlir::Type resultType = convertType(info.getReturnType());
   SmallVector<mlir::Type, 8> argTypes;
-  argTypes.reserve(info.getNumRequiredArgs());
+  argTypes.reserve(info.getNumRequiredArgs() + 1);
 
   for (const CanQualType &argType : info.requiredArguments())
     argTypes.push_back(convertType(argType));
 
+  if (info.getReturnInfo().isIndirect()) {
+    mlir::Type sretTy =
+        cir::PointerType::get(convertType(info.getReturnType()));
+    if (info.getReturnInfo().isSRetAfterThis())
+      argTypes.insert(argTypes.begin() + 1, sretTy);
+    else
+      argTypes.insert(argTypes.begin(), sretTy);
+    return cir::FuncType::get(argTypes, builder.getVoidTy(), info.isVariadic());
+  }
+
+  mlir::Type resultType = convertType(info.getReturnType());
   return cir::FuncType::get(argTypes,
                             (resultType ? resultType : builder.getVoidTy()),
                             info.isVariadic());
@@ -674,6 +685,9 @@ static bool determineNoUndef(QualType clangTy, CIRGenTypes &types,
 void CIRGenModule::constructFunctionReturnAttributes(
     const CIRGenFunctionInfo &info, const Decl *targetDecl, bool isThunk,
     mlir::NamedAttrList &retAttrs) {
+  if (info.getReturnInfo().isIndirect())
+    return;
+
   // Collect attributes from arguments and return values.
   QualType retTy = info.getReturnType();
   const cir::ABIArgInfo retInfo = info.getReturnInfo();
@@ -1365,6 +1379,17 @@ RValue CIRGenFunction::emitCall(const CIRGenFunctionInfo &funcInfo,
     }
   }
 
+  Address sretDest = Address::invalid();
+  if (funcInfo.getReturnInfo().isIndirect()) {
+    sretDest = returnValue.getValue();
+    if (!sretDest.isValid())
+      sretDest = createMemTemp(retTy, loc, getCounterAggTmpAsString());
+    if (funcInfo.getReturnInfo().isSRetAfterThis())
+      cirCallArgs.insert(cirCallArgs.begin() + 1, sretDest.getPointer());
+    else
+      cirCallArgs.insert(cirCallArgs.begin(), sretDest.getPointer());
+  }
+
   const CIRGenCallee &concreteCallee = callee.prepareConcreteCallee(*this);
   mlir::Operation *calleePtr = concreteCallee.getFunctionPointer();
 
@@ -1390,6 +1415,13 @@ RValue CIRGenFunction::emitCall(const CIRGenFunctionInfo &funcInfo,
       callingConv == cir::CallingConv::AMDGPUKernel ||
       callingConv == cir::CallingConv::PTXKernel)
     cgm.errorNYI(loc, "emitCall: call to kernel function");
+
+  if (funcInfo.getReturnInfo().isIndirect()) {
+    if (funcInfo.getReturnInfo().isSRetAfterThis())
+      argAttrs.insert(argAttrs.begin() + 1, mlir::NamedAttrList{});
+    else
+      argAttrs.insert(argAttrs.begin(), mlir::NamedAttrList{});
+  }
 
   auto resolvedFuncOpFromGlobal = [&](mlir::Operation *op) -> cir::FuncOp {
     if (auto fnOp = dyn_cast<cir::FuncOp>(op))
@@ -1527,7 +1559,7 @@ RValue CIRGenFunction::emitCall(const CIRGenFunctionInfo &funcInfo,
     theCall->setAttr(cir::CIRDialect::getMustTailAttrName(),
                      builder.getUnitAttr());
 
-    if (isa<cir::VoidType>(convertType(retTy)))
+    if (theCall->getOpResults().empty())
       cir::ReturnOp::create(builder, loc);
     else
       cir::ReturnOp::create(builder, loc, theCall->getResult(0));
@@ -1538,6 +1570,9 @@ RValue CIRGenFunction::emitCall(const CIRGenFunctionInfo &funcInfo,
     builder.createBlock(builder.getBlock()->getParent());
     return getUndefRValue(retTy);
   }
+
+  if (funcInfo.getReturnInfo().isIndirect())
+    return RValue::getAggregate(sretDest);
 
   assert(!cir::MissingFeatures::opCallReturn());
 

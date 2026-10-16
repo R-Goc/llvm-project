@@ -142,7 +142,8 @@ private:
                     llvm::abi::RequiredArgs required,
                     const llvm::abi::TargetInfo &targetInfo,
                     llvm::CallingConv::ID callConv,
-                    llvm::function_ref<mlir::InFlightDiagnostic()> emitError);
+                    llvm::function_ref<mlir::InFlightDiagnostic()> emitError,
+                    bool isInstanceMethod = false);
 
   /// Classify \p call, which passes more operands than \p calleeTy declares,
   /// from the call's operands.
@@ -167,6 +168,11 @@ createInjectedABIClassifier(const mlir::DataLayout &dl,
 std::unique_ptr<CIRABIClassifier>
 createX86_64ABIClassifier(const mlir::DataLayout &dl, mlir::ModuleOp modOp,
                           const ABIClassifierOptions &options);
+
+/// The x86_64 Windows classifier.
+std::unique_ptr<CIRABIClassifier>
+createWinX86_64ABIClassifier(const mlir::DataLayout &dl, mlir::ModuleOp modOp,
+                             const ABIClassifierOptions &options);
 
 /// The AMDGPU classifier.
 std::unique_ptr<CIRABIClassifier>

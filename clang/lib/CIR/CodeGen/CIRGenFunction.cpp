@@ -490,10 +490,21 @@ void CIRGenFunction::emitFunctionProlog(const FunctionArgList &args,
     builder.CIRBaseBuilderTy::createStore(loc, zero, returnValue.getPointer());
   }
 
+  bool hasIndirectRet = curFnInfo && curFnInfo->getReturnInfo().isIndirect();
+  bool sretAfterThis =
+      hasIndirectRet && curFnInfo->getReturnInfo().isSRetAfterThis();
+
   // Declare all the function arguments in the symbol table.
-  for (const auto nameValue : llvm::zip(args, entryBB->getArguments())) {
-    const VarDecl *paramVar = std::get<0>(nameValue);
-    mlir::Value paramVal = std::get<1>(nameValue);
+  for (size_t i = 0; i < args.size(); ++i) {
+    const VarDecl *paramVar = args[i];
+    size_t bbArgIndex = i;
+    if (hasIndirectRet) {
+      if (sretAfterThis)
+        bbArgIndex = (i == 0) ? 0 : (i + 1);
+      else
+        bbArgIndex = i + 1;
+    }
+    mlir::Value paramVal = entryBB->getArgument(bbArgIndex);
     CharUnits alignment = getContext().getDeclAlign(paramVar);
     mlir::Location paramLoc = getLoc(paramVar->getSourceRange());
     paramVal.setLoc(paramLoc);
@@ -587,6 +598,9 @@ void CIRGenFunction::startFunction(GlobalDecl gd, QualType returnType,
     fn->setAttr(cir::CIRDialect::getNoRecurseAttrName(),
                 mlir::UnitAttr::get(fn.getContext()));
 
+  if (!curFnInfo && gd.getDecl())
+    curFnInfo = &cgm.getTypes().arrangeGlobalDeclaration(gd);
+
   // This is an artifact of the legacy handling of constrained floating-point
   // modes. The rounding mode and exception behavior tracked in
   // clang::LangOptions don't correspond directly to the representation we
@@ -608,11 +622,20 @@ void CIRGenFunction::startFunction(GlobalDecl gd, QualType returnType,
   mlir::Block *entryBB = &fn.getBlocks().front();
   builder.setInsertionPointToStart(entryBB);
 
-  // When the current function is not void, create an address to store the
-  // result value.
-  if (!returnType->isVoidType()) {
-    // Determine the function body end location.  A function without a body
-    // uses its declaration's location, and a null fd uses loc.
+  // Determine the function body end location.  A function without a body
+  // uses its declaration's location, and a null fd uses loc.
+
+  // When the current function has an indirect return, initialize returnValue
+  // directly from the caller's sret buffer without creating a local __retval
+  // alloca.
+  if (curFnInfo && curFnInfo->getReturnInfo().isIndirect()) {
+    unsigned sretIndex = curFnInfo->getReturnInfo().isSRetAfterThis() ? 1 : 0;
+    mlir::Value sretVal = fn.getArgument(sretIndex);
+    returnValue =
+        Address(sretVal, curFnInfo->getReturnInfo().getIndirectAlign());
+  } else if (!returnType->isVoidType()) {
+    // Determine the function body end location.
+    // If fd is null or has no body, use loc as fallback.
     SourceLocation bodyEndLoc = loc;
     if (fd) {
       if (Stmt *body = fd->getBody())
@@ -659,12 +682,12 @@ void CIRGenFunction::startFunction(GlobalDecl gd, QualType returnType,
       md->getParent()->getCaptureFields(lambdaCaptureFields,
                                         lambdaThisCaptureField);
       if (lambdaThisCaptureField) {
-        // If the lambda captures the object referred to by '*this' - either by
-        // value or by reference, make sure CXXThisValue points to the correct
-        // object.
+        // If the lambda captures the object referred to by '*this' - either
+        // by value or by reference, make sure CXXThisValue points to the
+        // correct object.
 
-        // Get the lvalue for the field (which is a copy of the enclosing object
-        // or contains the address of the enclosing object).
+        // Get the lvalue for the field (which is a copy of the enclosing
+        // object or contains the address of the enclosing object).
         LValue thisFieldLValue =
             emitLValueForLambdaField(lambdaThisCaptureField);
         if (!lambdaThisCaptureField->getType()->isPointerType()) {
@@ -672,8 +695,8 @@ void CIRGenFunction::startFunction(GlobalDecl gd, QualType returnType,
           // address. Sign this pointer.
           cxxThisValue = thisFieldLValue.getPointer();
         } else {
-          // Load the lvalue pointed to by the field, since '*this' was captured
-          // by reference.
+          // Load the lvalue pointed to by the field, since '*this' was
+          // captured by reference.
           cxxThisValue =
               emitLoadOfLValue(thisFieldLValue, SourceLocation()).getValue();
         }
@@ -694,8 +717,8 @@ void CIRGenFunction::startFunction(GlobalDecl gd, QualType returnType,
   }
 
   // If any of the arguments have a variably modified type, make sure to
-  // emit the type size, but only if the function is not naked. Naked functions
-  // have no prolog to run this evaluation.
+  // emit the type size, but only if the function is not naked. Naked
+  // functions have no prolog to run this evaluation.
   if (!fd || !fd->hasAttr<NakedAttr>()) {
     for (const VarDecl *vd : args) {
       // Dig out the type as written from ParmVarDecls; it's unclear whether
@@ -759,6 +782,9 @@ cir::FuncOp CIRGenFunction::generateCode(clang::GlobalDecl gd, cir::FuncOp fn,
                                          cir::FuncType funcType) {
   const auto *funcDecl = cast<FunctionDecl>(gd.getDecl());
   curGD = gd;
+  const CIRGenFunctionInfo &fnInfo =
+      cgm.getTypes().arrangeGlobalDeclaration(gd);
+  curFnInfo = &fnInfo;
 
   if (funcDecl->isInlineBuiltinDeclaration()) {
     // When generating code for a builtin with an inline declaration, use a
@@ -790,9 +816,10 @@ cir::FuncOp CIRGenFunction::generateCode(clang::GlobalDecl gd, cir::FuncOp fn,
         std::string inlineName = funcDecl->getName().str() + ".inline";
         if (auto inlineFn = mlir::cast_or_null<cir::FuncOp>(
                 cgm.getGlobalValue(inlineName))) {
-          // Replace all uses of the .inline function with the regular function
-          // FIXME: This performs a linear walk over the module. Introduce some
-          // caching here.
+          // Replace all uses of the .inline function with the regular
+          // function
+          // FIXME: This performs a linear walk over the module. Introduce
+          // some caching here.
           if (inlineFn
                   .replaceAllSymbolUses(fn.getSymNameAttr(), cgm.getModule())
                   .failed())
@@ -967,7 +994,7 @@ void CIRGenFunction::emitDestructorBody(FunctionArgList &args) {
     return;
   }
 
-  assert(body && !cir::MissingFeatures::incrementProfileCounter());
+  assert(!cir::MissingFeatures::incrementProfileCounter());
 
   // The call to operator delete in a deleting destructor happens
   // outside of the function-try-block, which means it's always
@@ -982,7 +1009,8 @@ void CIRGenFunction::emitDestructorBody(FunctionArgList &args) {
     const FunctionDecl *operatorDelete = dtor->getOperatorDelete();
     if (operatorDelete->isDestroyingOperatorDelete()) {
       if (cxxStructorImplicitParamValue) {
-        // The implicit parameter of a deleting destructor is the Microsoft ABI.
+        // The implicit parameter of a deleting destructor is the Microsoft
+        // ABI.
         cgm.errorNYI(dtor->getSourceRange(), "emitConditionalArrayDtorCall");
       }
       emitDeleteCall(operatorDelete, loadThisForDtorDelete(dtor),
@@ -1316,8 +1344,8 @@ LValue CIRGenFunction::emitLValue(const Expr *e) {
     FullExprCleanupScope scope(*this, cleanups->getSubExpr());
     LValue lv = emitLValue(cleanups->getSubExpr());
     if (lv.isSimple()) {
-      // Defend against branches out of gnu statement expressions surrounded by
-      // cleanups.
+      // Defend against branches out of gnu statement expressions surrounded
+      // by cleanups.
       Address addr = lv.getAddress();
       mlir::Value v = addr.getPointer();
       scope.exit({&v});
