@@ -482,6 +482,12 @@ public:
         IntegerType(BitWidth, Align, Signed, IsBitInt);
   }
 
+  const IntegerType *getIntegerType(TypeSize Size, bool Signed = false) {
+    uint64_t BitWidth = Size.getFixedValue();
+    return getIntegerType(BitWidth, Align(std::max<uint64_t>(1, BitWidth / 8)),
+                          Signed);
+  }
+
   const FloatType *getFloatType(const fltSemantics &Semantics, Align Align) {
     return new (Allocator.Allocate<FloatType>()) FloatType(Semantics, Align);
   }
