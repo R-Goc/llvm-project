@@ -86,3 +86,42 @@ Derived::~Derived() {}
 // CIR-LABEL: cir.func {{.*}} @"??1Derived@@QEAA@XZ"
 // CIR-SAME: (%[[THIS:.*]]: !cir.ptr<!rec_Derived>
 // CIR:   cir.call @"??1Base@@QEAA@XZ"
+
+//===----------------------------------------------------------------------===//
+// Section 3: Virtual Functions and Vector/Scalar Deleting Destructors
+//===----------------------------------------------------------------------===//
+
+class Shape {
+public:
+  virtual ~Shape();
+  virtual void draw();
+};
+
+void call_virtual(Shape *s) {
+  s->draw();
+}
+
+// Virtual call uses vtable lookup:
+// CIR-LABEL: cir.func {{.*}} @"?call_virtual@@YAXPEAVShape@@@Z"
+// CIR-SAME: (%[[ARG:.*]]: !cir.ptr<!rec_Shape>{{.*}})
+// CIR:   %[[VPTR:.*]] = cir.vtable.get_vptr
+// CIR:   %[[VTABLE_PTR:.*]] = cir.load align(8) %[[VPTR]]
+// CIR:   %[[VFN_SLOT:.*]] = cir.vtable.get_virtual_fn_addr %[[VTABLE_PTR]][1]
+// CIR:   %[[VFN:.*]] = cir.load align(8) %[[VFN_SLOT]]
+// CIR:   cir.call %[[VFN]](%{{.*}})
+
+void delete_virtual(Shape *s) {
+  delete s;
+}
+
+// Virtual destructor call triggers vector/scalar deleting destructor (?_E or ?_G)
+// with implicit should_call_delete flag passed as an argument:
+// CIR-LABEL: cir.func {{.*}} @"?delete_virtual@@YAXPEAVShape@@@Z"
+// CIR-SAME: (%[[ARG:.*]]: !cir.ptr<!rec_Shape>{{.*}})
+// CIR:   %[[FLAG:.*]] = cir.const #cir.int<1> : !s32i
+// CIR:   %[[VPTR:.*]] = cir.vtable.get_vptr
+// CIR:   %[[VTABLE_PTR:.*]] = cir.load align(8) %[[VPTR]]
+// CIR:   %[[VFN_SLOT:.*]] = cir.vtable.get_virtual_fn_addr %[[VTABLE_PTR]][0]
+// CIR:   %[[VFN:.*]] = cir.load align(8) %[[VFN_SLOT]]
+// CIR:   cir.call %[[VFN]](%{{.*}}, %[[FLAG]])
+

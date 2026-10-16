@@ -1897,6 +1897,19 @@ void CIRGenModule::applyReplacements() {
   if (replacements.empty())
     return;
 
+  // Resolve transitive replacement chains: if A -> B and B -> C, then A -> C.
+  for (auto &entry : replacements) {
+    llvm::SmallPtrSet<mlir::Operation *, 4> visited;
+    visited.insert(entry.second);
+    while (auto fn = mlir::dyn_cast_or_null<cir::FuncOp>(entry.second)) {
+      auto it = replacements.find(fn.getSymName());
+      if (it != replacements.end() && visited.insert(it->second).second)
+        entry.second = it->second;
+      else
+        break;
+    }
+  }
+
   // Build a symbol user map once — this walks the module O(M) one time.
   // Previously, each replaceAllSymbolUses call walked the entire module,
   // giving O(R × M) quadratic behavior for R replacements.
@@ -1917,6 +1930,27 @@ void CIRGenModule::applyReplacements() {
       errorNYI(replacement->getLoc(), "replacement is not a function");
       continue;
     }
+    if (newF == oldF)
+      continue;
+
+    for (mlir::Operation *user : userMap.getUsers(oldF)) {
+      auto call = mlir::dyn_cast<cir::CallOp>(user);
+      if (!call)
+        continue;
+      mlir::OpBuilder b(call);
+      for (auto [idx, pair] : llvm::enumerate(
+               llvm::zip(call.getArgs(), newF.getFunctionType().getInputs()))) {
+        auto [argOp, fnArgType] = pair;
+        if (argOp.getType() != fnArgType) {
+          if (mlir::isa<cir::PointerType>(argOp.getType()) &&
+              mlir::isa<cir::PointerType>(fnArgType)) {
+            mlir::Value castOp = cir::CastOp::create(
+                b, call.getLoc(), fnArgType, cir::CastKind::bitcast, argOp);
+            call.setOperand(idx, castOp);
+          }
+        }
+      }
+    }
 
     assert(verifyPointerTypeArgs(oldF, newF, userMap) &&
            "call argument types do not match replacement function");
@@ -1924,7 +1958,8 @@ void CIRGenModule::applyReplacements() {
     // Replace old with new, but keep the old order.  Uses
     // SymbolUserMap to touch only actual users, not the whole module.
     userMap.replaceAllUsesWith(oldF, newF.getSymNameAttr());
-    newF->moveBefore(oldF);
+    if (newF->getBlock() && oldF->getBlock())
+      newF->moveBefore(oldF);
     eraseGlobalSymbol(oldF);
     oldF->erase();
   }
@@ -3717,13 +3752,27 @@ cir::FuncOp CIRGenModule::getOrCreateCIRFunction(
     // How will we support this?
   }
 
+  bool isIncompleteFunction = false;
+  cir::FuncType cirFuncType;
+  if (auto ft = mlir::dyn_cast<cir::FuncType>(funcType)) {
+    cirFuncType = ft;
+  } else {
+    cirFuncType = cir::FuncType::get(getBuilder().getContext(), {},
+                                     /*optionalReturnType=*/nullptr,
+                                     /*isVarArg=*/true);
+    isIncompleteFunction = true;
+  }
+
   auto *funcDecl = llvm::cast_or_null<FunctionDecl>(gd.getDecl());
   bool invalidLoc = !funcDecl ||
                     funcDecl->getSourceRange().getBegin().isInvalid() ||
                     funcDecl->getSourceRange().getEnd().isInvalid();
   cir::FuncOp funcOp = createCIRFunction(
       invalidLoc ? theModule->getLoc() : getLoc(funcDecl->getSourceRange()),
-      mangledName, mlir::cast<cir::FuncType>(funcType), funcDecl);
+      mangledName, cirFuncType, funcDecl);
+
+  if (isIncompleteFunction)
+    funcOp.setNoProto(true);
 
   if (funcDecl && funcDecl->hasAttr<AnnotateAttr>())
     deferredAnnotations[mangledName] = funcDecl;
@@ -3754,7 +3803,7 @@ cir::FuncOp CIRGenModule::getOrCreateCIRFunction(
   }
 
   if (d)
-    setFunctionAttributes(gd, funcOp, /*isIncompleteFunction=*/false, isThunk);
+    setFunctionAttributes(gd, funcOp, isIncompleteFunction, isThunk);
   if (!extraAttrs.empty())
     for (mlir::NamedAttribute attr : extraAttrs)
       if (!funcOp->hasDiscardableAttr(attr.getName()))
@@ -3762,9 +3811,7 @@ cir::FuncOp CIRGenModule::getOrCreateCIRFunction(
 
   // 'dontDefer' actually means don't move this to the deferredDeclsToEmit list.
   if (dontDefer) {
-    // TODO(cir): This assertion will need an additional condition when we
-    // support incomplete functions.
-    assert(funcOp.getFunctionType() == funcType);
+    assert(isIncompleteFunction || funcOp.getFunctionType() == funcType);
     return funcOp;
   }
 
@@ -4261,6 +4308,103 @@ void CIRGenModule::emitAliasForGlobal(StringRef mangledName,
 
   // Finally, set up the alias with its proper name and attributes.
   setCommonAttributes(aliasGD, alias);
+}
+
+bool CIRGenModule::tryEmitBaseDestructorAsAlias(const CXXDestructorDecl *d) {
+  if (!getCodeGenOpts().CXXCtorDtorAliases)
+    return true;
+
+  if (getCodeGenOpts().OptimizationLevel == 0)
+    return true;
+
+  if (getTarget().getTriple().isWindowsArm64EC())
+    return true;
+
+  if (getCodeGenOpts().SanitizeMemoryUseAfterDtor &&
+      !d->getParent()->field_empty())
+    return true;
+
+  if (!d->hasTrivialBody())
+    return true;
+
+  const CXXRecordDecl *classDecl = d->getParent();
+
+  if (classDecl->mayInsertExtraPadding())
+    return true;
+
+  if (classDecl->getNumVBases())
+    return true;
+
+  for (const auto *f : classDecl->fields())
+    if (f->getType().isDestructedType())
+      return true;
+
+  const CXXRecordDecl *uniqueBase = nullptr;
+  for (const auto &b : classDecl->bases()) {
+    if (b.isVirtual())
+      continue;
+
+    const auto *base = b.getType()->castAsCXXRecordDecl();
+    if (base->hasTrivialDestructor())
+      continue;
+
+    if (uniqueBase)
+      return true;
+    uniqueBase = base;
+  }
+
+  if (!uniqueBase)
+    return true;
+
+  const ASTRecordLayout &classLayout = astContext.getASTRecordLayout(classDecl);
+  if (!classLayout.getBaseClassOffset(uniqueBase).isZero())
+    return true;
+
+  const CXXDestructorDecl *baseD = uniqueBase->getDestructor();
+  if (baseD->getType()->castAs<FunctionType>()->getCallConv() !=
+      d->getType()->castAs<FunctionType>()->getCallConv())
+    return true;
+
+  GlobalDecl aliasDecl(d, Dtor_Base);
+  GlobalDecl targetDecl(baseD, Dtor_Base);
+
+  cir::GlobalLinkageKind linkage = getFunctionLinkage(aliasDecl);
+
+  if (!cir::isValidLinkage(linkage))
+    return true;
+
+  cir::GlobalLinkageKind targetLinkage = getFunctionLinkage(targetDecl);
+
+  StringRef mangledName = getMangledName(aliasDecl);
+  auto *entry = getGlobalValue(mangledName);
+  auto globalValue = dyn_cast_or_null<cir::CIRGlobalValueInterface>(entry);
+  if (globalValue && !globalValue.isDeclaration())
+    return false;
+  if (replacements.count(mangledName))
+    return false;
+
+  auto aliasee = dyn_cast_or_null<cir::FuncOp>(getAddrOfGlobal(targetDecl));
+  if (!aliasee)
+    return true;
+
+  if (cir::isDiscardableIfUnused(linkage) &&
+      !(targetLinkage == cir::GlobalLinkageKind::AvailableExternallyLinkage &&
+        targetDecl.getDecl()->hasAttr<AlwaysInlineAttr>())) {
+    addReplacement(mangledName, aliasee);
+    return false;
+  }
+
+  if (cir::isWeakForLinker(linkage) && getTriple().isOSBinFormatCOFF())
+    return true;
+
+  if (aliasee.isDeclaration())
+    return true;
+
+  if (cir::isWeakForLinker(targetLinkage))
+    return true;
+
+  emitAliasForGlobal(mangledName, entry, aliasDecl, aliasee, linkage);
+  return false;
 }
 
 mlir::Type CIRGenModule::convertType(QualType type) {
