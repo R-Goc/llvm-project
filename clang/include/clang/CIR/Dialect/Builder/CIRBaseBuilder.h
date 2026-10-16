@@ -202,8 +202,13 @@ public:
     return getPointerTo(cir::VoidType::get(getContext()), as);
   }
 
-  cir::MethodAttr getMethodAttr(cir::MethodType ty, cir::FuncOp methodFuncOp) {
+  cir::MethodAttr getMethodAttr(cir::MethodType ty, cir::FuncOp methodFuncOp,
+                                int32_t nvOffset = 0, int32_t vbptrOffset = 0,
+                                int32_t vbtableOffset = 0) {
     auto methodFuncSymbolRef = mlir::FlatSymbolRefAttr::get(methodFuncOp);
+    if (nvOffset != 0 || vbptrOffset != 0 || vbtableOffset != 0)
+      return cir::MethodAttr::get(ty, methodFuncSymbolRef, nvOffset,
+                                  vbptrOffset, vbtableOffset);
     return cir::MethodAttr::get(ty, methodFuncSymbolRef);
   }
 
