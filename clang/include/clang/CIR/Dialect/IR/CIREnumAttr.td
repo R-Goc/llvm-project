@@ -66,4 +66,16 @@ def CIR_LangAddressSpace : CIR_I32Enum<
 
 }
 
+def CIR_MSInheritanceModel : CIR_I32Enum<
+  "MSInheritanceModel", "MSVC inheritance model for member pointers", [
+  I32EnumCase<"Single", 0, "single">,
+  I32EnumCase<"Multiple", 1, "multiple">,
+  I32EnumCase<"Virtual", 2, "virtual">,
+  I32EnumCase<"Unspecified", 3, "unspecified">
+]> {
+  let description = [{
+    Enumerates the MSVC inheritance models for member pointers: single,
+    multiple, virtual, or unspecified.
+  }];
+}
 #endif // CLANG_CIR_DIALECT_IR_CIRENUMATTR_TD

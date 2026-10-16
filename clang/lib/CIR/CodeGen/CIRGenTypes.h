@@ -20,6 +20,7 @@
 #include "clang/AST/DeclCXX.h"
 #include "clang/AST/Type.h"
 #include "clang/Basic/ABI.h"
+#include "clang/CIR/Dialect/IR/CIROpsEnums.h"
 #include "clang/CIR/Dialect/IR/CIRTypes.h"
 
 #include "llvm/ADT/DenseSet.h"
