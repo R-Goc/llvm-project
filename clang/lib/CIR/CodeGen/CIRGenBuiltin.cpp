@@ -3123,13 +3123,38 @@ RValue CIRGenFunction::emitBuiltinExpr(const GlobalDecl &gd, unsigned builtinID,
   case Builtin::BI__builtin_ptrauth_sign_unauthenticated:
   case Builtin::BI__builtin_ptrauth_strip:
   case Builtin::BI__builtin_get_vtable_pointer:
-  case Builtin::BI__exception_code:
-  case Builtin::BI_exception_code:
-  case Builtin::BI__exception_info:
-  case Builtin::BI_exception_info:
-  case Builtin::BI__abnormal_termination:
-  case Builtin::BI_abnormal_termination:
     return errorBuiltinNYI(*this, e, builtinID);
+  case Builtin::BI__exception_code:
+  case Builtin::BI_exception_code: {
+    mlir::Location loc = getLoc(e->getSourceRange());
+    mlir::Type resTy = convertType(e->getType());
+    if (sehCodeSlotStack.empty()) {
+      return RValue::get(builder.getConstInt(loc, resTy, 0));
+    }
+    mlir::Value val = builder.createLoad(loc, sehCodeSlotStack.back());
+    if (val.getType() != resTy)
+      val = builder.createIntCast(val, resTy);
+    return RValue::get(val);
+  }
+  case Builtin::BI__exception_info:
+  case Builtin::BI_exception_info: {
+    mlir::Location loc = getLoc(e->getSourceRange());
+    if (sehInfo)
+      return RValue::get(sehInfo);
+    return RValue::get(builder.getNullPtr(builder.getVoidPtrTy(), loc));
+  }
+  case Builtin::BI__abnormal_termination:
+  case Builtin::BI_abnormal_termination: {
+    mlir::Location loc = getLoc(e->getSourceRange());
+    if (isOutlinedSEHHelper) {
+      auto funcOp = mlir::cast<cir::FuncOp>(curFn);
+      mlir::Value arg0 = funcOp.getArgument(0);
+      mlir::Type s32Ty = builder.getSInt32Ty();
+      mlir::Value castVal = builder.createIntCast(arg0, s32Ty);
+      return RValue::get(castVal);
+    }
+    return RValue::get(builder.getSInt32(0, loc));
+  }
   case Builtin::BI_setjmpex:
   case Builtin::BI_setjmp:
     if (getTarget().getTriple().isOSMSVCRT()) {

@@ -1279,6 +1279,13 @@ public:
   bool isCatchOrCleanupRequired();
   bool currentFunctionUsesSEHTry() const;
 
+  SmallVector<mlir::Block *, 4> sehTryEpilogueStack;
+  SmallVector<mlir::Value, 4> sehCodeSlotStack;
+  SmallVector<Address, 4> sehFinallyAbnormalSlotStack;
+  SmallVector<std::pair<const VarDecl *, Address>, 8> escapedLocals;
+  bool isOutlinedSEHHelper = false;
+  mlir::Value sehInfo;
+
   /// Takes the old cleanup stack size and emits the cleanup blocks
   /// that have been added.
   void popCleanupBlocks(EHScopeStack::stable_iterator oldCleanupStackDepth,
@@ -2238,6 +2245,12 @@ public:
                                      cxxTryBodyEmitter &bodyCallback,
                                      bool isFnTryBlock = false);
   mlir::LogicalResult emitCXXTryStmt(const clang::CXXTryStmt &s);
+  mlir::LogicalResult emitSEHTryStmt(const clang::SEHTryStmt &s);
+  mlir::LogicalResult emitSEHLeaveStmt(const clang::SEHLeaveStmt &s);
+  cir::FuncOp generateSEHFinallyFunction(CIRGenFunction &parentCGF,
+                                         const clang::SEHFinallyStmt &finally);
+  cir::FuncOp generateSEHFilterFunction(CIRGenFunction &parentCGF,
+                                        const clang::SEHExceptStmt &except);
 
   void emitCtorPrologue(const clang::CXXConstructorDecl *ctor,
                         clang::CXXCtorType ctorType, FunctionArgList &args);

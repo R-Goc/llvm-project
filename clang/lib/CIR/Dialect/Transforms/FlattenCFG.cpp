@@ -2008,7 +2008,12 @@ public:
 
     // Get references to try body blocks before inlining.
     mlir::Block *bodyEntry = &tryOp.getTryRegion().front();
-    mlir::Block *bodyExit = &tryOp.getTryRegion().back();
+    // Collect all yield operations in the try body region before inlining.
+    SmallVector<cir::YieldOp> yieldsToReplace;
+    for (mlir::Block &block : tryOp.getTryRegion()) {
+      if (auto bodyYield = dyn_cast<cir::YieldOp>(block.getTerminator()))
+        yieldsToReplace.push_back(bodyYield);
+    }
 
     // Inline the try body region before the continue block.
     rewriter.inlineRegionBefore(tryOp.getTryRegion(), continueBlock);
@@ -2017,8 +2022,8 @@ public:
     rewriter.setInsertionPointToEnd(currentBlock);
     cir::BrOp::create(rewriter, loc, bodyEntry);
 
-    // Replace the try body's yield terminator with a branch to continue.
-    if (auto bodyYield = dyn_cast<cir::YieldOp>(bodyExit->getTerminator())) {
+    // Replace the try body's yield terminators with a branch to continue.
+    for (cir::YieldOp bodyYield : yieldsToReplace) {
       rewriter.setInsertionPoint(bodyYield);
       rewriter.replaceOpWithNewOp<cir::BrOp>(bodyYield, continueBlock);
     }

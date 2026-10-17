@@ -535,6 +535,13 @@ public:
     return cir::GlobalViewAttr::get(type, symbol, indices, addressPoint);
   }
 
+  /// Get constant address of a function as an MLIR attribute.
+  cir::GlobalViewAttr getGlobalViewAttr(cir::PointerType type,
+                                        cir::FuncOp funcOp) {
+    auto symbol = mlir::FlatSymbolRefAttr::get(funcOp.getSymNameAttr());
+    return cir::GlobalViewAttr::get(type, symbol);
+  }
+
   /// Get constant address of a global variable as an MLIR attribute.
   /// This overload converts raw int64_t indices to an ArrayAttr.
   cir::GlobalViewAttr getGlobalViewAttr(cir::PointerType type,

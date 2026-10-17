@@ -548,6 +548,7 @@ public:
                    addr.getAlignment());
   }
 
+  using cir::CIRBaseBuilderTy::createLoad;
   cir::LoadOp createLoad(mlir::Location loc, Address addr,
                          bool isVolatile = false, bool isNontemporal = false) {
     mlir::IntegerAttr align = getAlignmentAttr(addr.getAlignment());
