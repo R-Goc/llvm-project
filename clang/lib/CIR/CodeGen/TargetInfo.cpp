@@ -8,6 +8,7 @@
 #include "clang/CIR/Dialect/IR/CIRDialect.h"
 #include "clang/CIR/MissingFeatures.h"
 #include "clang/CodeGenUtils/TargetUtils.h"
+#include "llvm/Support/raw_ostream.h"
 
 using namespace clang;
 using namespace clang::CIRGen;
@@ -152,6 +153,87 @@ public:
 
 namespace {
 
+static void rewriteInputConstraintReferences(unsigned firstIn,
+                                             unsigned numNewOuts,
+                                             std::string &asmString) {
+  std::string buf;
+  llvm::raw_string_ostream os(buf);
+  size_t pos = 0;
+  while (pos < asmString.size()) {
+    size_t dollarStart = asmString.find('$', pos);
+    if (dollarStart == std::string::npos)
+      dollarStart = asmString.size();
+    size_t dollarEnd = asmString.find_first_not_of('$', dollarStart);
+    if (dollarEnd == std::string::npos)
+      dollarEnd = asmString.size();
+    os << StringRef(&asmString[pos], dollarEnd - pos);
+    pos = dollarEnd;
+    size_t numDollars = dollarEnd - dollarStart;
+    if (numDollars % 2 != 0 && pos < asmString.size()) {
+      size_t digitStart = pos;
+      if (asmString[digitStart] == '{') {
+        os << '{';
+        ++digitStart;
+      }
+      size_t digitEnd = asmString.find_first_not_of("0123456789", digitStart);
+      if (digitEnd == std::string::npos)
+        digitEnd = asmString.size();
+      StringRef operandStr(&asmString[digitStart], digitEnd - digitStart);
+      unsigned operandIndex;
+      if (!operandStr.getAsInteger(10, operandIndex)) {
+        if (operandIndex >= firstIn)
+          operandIndex += numNewOuts;
+        os << operandIndex;
+      } else {
+        os << operandStr;
+      }
+      pos = digitEnd;
+    }
+  }
+  asmString = std::move(buf);
+}
+
+class X86_32ABIInfo : public ABIInfo {
+public:
+  X86_32ABIInfo(CIRGenTypes &cgt) : ABIInfo(cgt) {}
+};
+
+class X86_32TargetCIRGenInfo : public TargetCIRGenInfo {
+public:
+  X86_32TargetCIRGenInfo(CIRGenTypes &cgt)
+      : TargetCIRGenInfo(std::make_unique<X86_32ABIInfo>(cgt)) {}
+
+  void addReturnRegisterOutputs(
+      CIRGenFunction &cgf, LValue returnSlot, std::string &constraints,
+      SmallVectorImpl<mlir::Type> &resultRegTypes,
+      SmallVectorImpl<mlir::Type> &resultTruncRegTypes,
+      SmallVectorImpl<LValue> &resultRegDests, std::string &asmString,
+      unsigned numOutputs) const override {
+    uint64_t retWidth = cgf.getContext().getTypeSize(returnSlot.getType());
+    if (!constraints.empty())
+      constraints += ',';
+    if (retWidth <= 32) {
+      constraints += "={eax}";
+      resultRegTypes.push_back(
+          cir::IntType::get(&cgf.getMLIRContext(), 32, /*isSigned=*/false));
+    } else {
+      constraints += "=A";
+      resultRegTypes.push_back(
+          cir::IntType::get(&cgf.getMLIRContext(), 64, /*isSigned=*/false));
+    }
+
+    mlir::Type coerceTy = cir::IntType::get(&cgf.getMLIRContext(), retWidth,
+                                            /*isSigned=*/false);
+    resultTruncRegTypes.push_back(coerceTy);
+
+    returnSlot.setAddress(
+        returnSlot.getAddress().withElementType(cgf.getBuilder(), coerceTy));
+    resultRegDests.push_back(returnSlot);
+
+    rewriteInputConstraintReferences(numOutputs, 1, asmString);
+  }
+};
+
 class X8664ABIInfo : public ABIInfo {
 public:
   X8664ABIInfo(CIRGenTypes &cgt) : ABIInfo(cgt) {}
@@ -167,6 +249,11 @@ public:
 std::unique_ptr<TargetCIRGenInfo>
 clang::CIRGen::createAMDGPUTargetCIRGenInfo(CIRGenTypes &cgt) {
   return std::make_unique<AMDGPUTargetCIRGenInfo>(cgt);
+}
+
+std::unique_ptr<TargetCIRGenInfo>
+clang::CIRGen::createX86_32TargetCIRGenInfo(CIRGenTypes &cgt) {
+  return std::make_unique<X86_32TargetCIRGenInfo>(cgt);
 }
 
 std::unique_ptr<TargetCIRGenInfo>

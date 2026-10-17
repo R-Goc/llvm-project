@@ -449,6 +449,22 @@ mlir::LogicalResult CIRGenFunction::emitAsmStmt(const AsmStmt &s) {
 
   } // iterate over output operands
 
+  if (isa<MSAsmStmt>(&s)) {
+    if (curFnInfo) {
+      const ABIArgInfo &retAI = curFnInfo->getReturnInfo();
+      if (retAI.isDirect() || retAI.isExtend()) {
+        if (returnValue.isValid()) {
+          LValue returnSlot = makeAddrLValue(returnValue, fnRetTy);
+          getTargetHooks().addReturnRegisterOutputs(
+              *this, returnSlot, constraints, resultRegTypes,
+              resultTruncRegTypes, resultRegDests, asmString,
+              s.getNumOutputs());
+          sawAsmBlock = true;
+        }
+      }
+    }
+  }
+
   for (unsigned i = 0, e = s.getNumInputs(); i != e; ++i) {
     TargetInfo::ConstraintInfo &info = inputConstraintInfos[i];
     const Expr *inputExpr = s.getInputExpr(i);

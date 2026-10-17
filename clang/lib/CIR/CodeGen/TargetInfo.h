@@ -16,6 +16,7 @@
 
 #include "ABIInfo.h"
 #include "CIRGenTypes.h"
+#include "CIRGenValue.h"
 #include "mlir/Dialect/Ptr/IR/MemorySpaceInterfaces.h"
 #include "clang/Basic/AddressSpaces.h"
 #include "clang/CIR/Dialect/IR/CIRAttrs.h"
@@ -182,6 +183,14 @@ public:
                                          mlir::Type ty) const {
     return ty;
   }
+
+  virtual void
+  addReturnRegisterOutputs(CIRGenFunction &cgf, LValue returnSlot,
+                           std::string &constraints,
+                           SmallVectorImpl<mlir::Type> &resultRegTypes,
+                           SmallVectorImpl<mlir::Type> &resultTruncRegTypes,
+                           SmallVectorImpl<LValue> &resultRegDests,
+                           std::string &asmString, unsigned numOutputs) const {}
 };
 
 std::unique_ptr<TargetCIRGenInfo>
@@ -190,6 +199,9 @@ createAMDGPUTargetCIRGenInfo(CIRGenTypes &cgt);
 /// Set AMDGPU-specific function attributes for HIP kernels.
 void setAMDGPUTargetFunctionAttributes(const clang::Decl *decl,
                                        cir::FuncOp func, CIRGenModule &cgm);
+
+std::unique_ptr<TargetCIRGenInfo>
+createX86_32TargetCIRGenInfo(CIRGenTypes &cgt);
 
 std::unique_ptr<TargetCIRGenInfo> createX8664TargetCIRGenInfo(CIRGenTypes &cgt);
 
