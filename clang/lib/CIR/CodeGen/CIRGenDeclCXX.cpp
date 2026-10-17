@@ -34,11 +34,8 @@ void CIRGenFunction::emitCXXGuardedInit(const VarDecl &varDecl,
   // attribute BEFORE emitting initialization. This ensures that GetGlobalOps
   // created during initialization (e.g., in the ctor region) will see the
   // attribute and be marked with static_local accordingly.
-  llvm::SmallString<256> guardName;
-  {
-    llvm::raw_svector_ostream out(guardName);
-    cgm.getCXXABI().getMangleContext().mangleStaticGuardVariable(&varDecl, out);
-  }
+  SmallString<256> guardName;
+  cgm.getCXXABI().getStaticLocalGuardName(varDecl, guardName);
 
   // Mark the global as requiring guarded dynamic initialization, with the
   // guard name. The emission of the guard/acquire is done during
@@ -99,16 +96,13 @@ void CIRGenModule::emitCXXGlobalVarDeclInitFunc(const VarDecl *vd,
        vd->hasAttr<CUDASharedAttr>()))
     return;
 
-  // Classic CodeGen dispatches guarded initialization through
-  // CGCXXABI::EmitGuardedInit, which the Microsoft ABI overrides with a
-  // completely different (bitmask-based "magic statics") guard scheme
-  // instead of the Itanium __cxa_guard_acquire/__cxa_guard_release calls
-  // that emitCXXGuardedInit/LoweringPrepare unconditionally assume here.
-  assert(!cir::MissingFeatures::msabi());
-
-  if (addr.hasWeakLinkage() || addr.hasLinkOnceLinkage() ||
-      (vd->getTLSKind() == VarDecl::TLS_Dynamic &&
-       isTemplateInstantiation(vd->getTemplateSpecializationKind()))) {
+  // MSVC only uses guards for static locals. Global variables with vague
+  // linkage (weak/linkonce_odr, selectany, template instantiations) are
+  // deduplicated via linkonce_odr COMDAT initializers, not guards.
+  if (!getASTContext().getTargetInfo().getCXXABI().isMicrosoft() &&
+      (addr.hasWeakLinkage() || addr.hasLinkOnceLinkage() ||
+       (vd->getTLSKind() == VarDecl::TLS_Dynamic &&
+        isTemplateInstantiation(vd->getTemplateSpecializationKind())))) {
     CIRGenFunction(*this, builder).emitCXXGuardedInit(*vd, addr, performInit);
   } else {
     emitCXXGlobalVarDeclInit(vd, addr, performInit);
