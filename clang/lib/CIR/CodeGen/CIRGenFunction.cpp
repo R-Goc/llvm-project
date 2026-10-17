@@ -581,6 +581,7 @@ void CIRGenFunction::startFunction(GlobalDecl gd, QualType returnType,
          "CIRGenFunction can only be used for one function at a time");
 
   curFn = fn;
+  fnRetTy = returnType;
 
   const Decl *d = gd.getDecl();
 
@@ -1219,7 +1220,14 @@ LValue CIRGenFunction::emitInitListLValue(const InitListExpr *e) {
   return emitLValue(e->getInit(0));
 }
 
-static std::variant<LValue, RValue>
+namespace {
+struct LValueOrRValue {
+  LValue lv;
+  RValue rv;
+};
+} // namespace
+
+static LValueOrRValue
 emitPseudoObjectExpr(CIRGenFunction &cgf, const PseudoObjectExpr *e,
                      bool forLValue, AggValueSlot slot) {
   using OVMD = CIRGenFunction::OpaqueValueMappingData;
@@ -1229,7 +1237,7 @@ emitPseudoObjectExpr(CIRGenFunction &cgf, const PseudoObjectExpr *e,
 
   // Find the result expression, if any.
   const Expr *resultExpr = e->getResultExpr();
-  std::variant<LValue, RValue> result;
+  LValueOrRValue result;
 
   for (const Expr *semantic : e->semantics()) {
     // If this semantic expression is an opaque value, bind it
@@ -1248,22 +1256,20 @@ emitPseudoObjectExpr(CIRGenFunction &cgf, const PseudoObjectExpr *e,
       OVMD opaqueData;
       if (ov == resultExpr && ov->isPRValue() && !forLValue &&
           CIRGenFunction::hasAggregateEvaluationKind(ov->getType())) {
-        cgf.cgm.errorNYI(e->getSourceRange(),
-                         "emitPseudoObjectExpr for RValue & aggregate kind");
+        cgf.emitAggExpr(ov->getSourceExpr(), slot);
+        LValue lv = cgf.makeAddrLValue(slot.getAddress(), ov->getType(),
+                                       AlignmentSource::Decl);
+        opaqueData = OVMD::bind(cgf, ov, lv);
+        result.rv = slot.asRValue();
       } else {
         opaqueData = OVMD::bind(cgf, ov, ov->getSourceExpr());
 
         // If this is the result, also evaluate the result now.
         if (ov == resultExpr) {
-          // FIXME: This doesn't really affect anything, but I cannot find a
-          // test for this, so leave an ErrorNYI here until we can find one.
-          cgf.cgm.errorNYI(e->getSourceRange(),
-                           "emitPseudoObjectExpr as result");
           if (forLValue)
-            result = cgf.emitLValue(ov);
+            result.lv = cgf.emitLValue(ov);
           else
-            cgf.cgm.errorNYI(e->getSourceRange(),
-                             "emitPseudoObjectExpr as an RValue");
+            result.rv = cgf.emitAnyExpr(ov, slot);
         }
       }
       opaques.push_back(opaqueData);
@@ -1271,14 +1277,10 @@ emitPseudoObjectExpr(CIRGenFunction &cgf, const PseudoObjectExpr *e,
       // Otherwise, if the expression is the result, evaluate it
       // and remember the result.
       if (forLValue)
-        result = cgf.emitLValue(semantic);
+        result.lv = cgf.emitLValue(semantic);
       else
-        result = cgf.emitAnyExpr(semantic, slot);
+        result.rv = cgf.emitAnyExpr(semantic, slot);
     } else {
-      // FIXME: best I can tell, this is only reachable as an r-value, so this
-      // isn't properly tested.
-      cgf.cgm.errorNYI(e->getSourceRange(),
-                       "emitPseudoObjectExpr as an ignored value");
       // Otherwise, evaluate the expression in an ignored context.
       cgf.emitIgnoredExpr(semantic);
     }
@@ -1289,13 +1291,12 @@ emitPseudoObjectExpr(CIRGenFunction &cgf, const PseudoObjectExpr *e,
 
 RValue CIRGenFunction::emitPseudoObjectRValue(const PseudoObjectExpr *e,
                                               AggValueSlot slot) {
-  return std::get<RValue>(
-      emitPseudoObjectExpr(*this, e, /*forLValue=*/false, slot));
+  return emitPseudoObjectExpr(*this, e, /*forLValue=*/false, slot).rv;
 }
 
 LValue CIRGenFunction::emitPseudoObjectLValue(const PseudoObjectExpr *e) {
-  return std::get<LValue>(emitPseudoObjectExpr(*this, e, /*forLValue=*/true,
-                                               AggValueSlot::ignored()));
+  return emitPseudoObjectExpr(*this, e, /*forLValue=*/true,
+                              AggValueSlot::ignored()).lv;
 }
 
 /// Emit code to compute a designator that specifies the location

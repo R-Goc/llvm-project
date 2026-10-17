@@ -51,6 +51,7 @@
 #include "llvm/ADT/MapVector.h"
 #include "llvm/ADT/StringMap.h"
 #include "llvm/ADT/TypeSwitch.h"
+#include "llvm/IR/Metadata.h"
 #include "llvm/IR/Module.h"
 #include "llvm/Support/AMDGPUAddrSpace.h"
 #include "llvm/Support/Casting.h"
@@ -7059,6 +7060,17 @@ lowerDirectlyFromCIRToLLVMIR(mlir::ModuleOp mlirModule, LLVMContext &llvmCtx,
         gv->setDLLStorageClass(llvm::GlobalValue::DLLImportStorageClass);
       else if (entry.second == cir::DLLStorageClass::DLLExportStorageClass)
         gv->setDLLStorageClass(llvm::GlobalValue::DLLExportStorageClass);
+    }
+  }
+
+  if (auto linkerOpts =
+          mlirModule->getAttrOfType<mlir::ArrayAttr>("cir.linker_options")) {
+    llvm::NamedMDNode *llvmLinkerOpts =
+        llvmModule->getOrInsertNamedMetadata("llvm.linker.options");
+    for (mlir::Attribute attr : linkerOpts) {
+      auto optStr = mlir::cast<mlir::StringAttr>(attr).getValue();
+      auto *mdStr = llvm::MDString::get(llvmCtx, optStr);
+      llvmLinkerOpts->addOperand(llvm::MDNode::get(llvmCtx, mdStr));
     }
   }
 

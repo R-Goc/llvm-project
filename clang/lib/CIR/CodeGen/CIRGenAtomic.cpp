@@ -1720,6 +1720,29 @@ RValue CIRGenFunction::emitAtomicExpr(AtomicExpr *e) {
       e->getExprLoc());
 }
 
+static bool hasVolatileMember(QualType T) {
+  if (const clang::RecordType *RT = T->getAs<clang::RecordType>()) {
+    const RecordDecl *RD = RT->getDecl();
+    return RD->hasVolatileMember();
+  }
+  if (const auto *AT = T->getAsArrayTypeUnsafe())
+    return hasVolatileMember(AT->getElementType());
+  return false;
+}
+
+bool CIRGenFunction::isLValueSuitableForInlineAtomic(LValue lv) {
+  if (!cgm.getLangOpts().MSVolatile)
+    return false;
+
+  AtomicInfo ai(*this, lv, builder.getUnknownLoc());
+  bool isVolatile = lv.isVolatile() || ::hasVolatileMember(lv.getType());
+  bool atomicIsInline = !ai.shouldUseLibCall();
+  if (getContext().getTypeSize(lv.getType()) >
+      getContext().getTypeSize(getContext().getIntPtrType()))
+    return false;
+  return isVolatile && atomicIsInline;
+}
+
 RValue CIRGenFunction::emitAtomicLoad(LValue lvalue, SourceLocation loc,
                                       AggValueSlot slot) {
   if (lvalue.getType()->isAtomicType())
@@ -1740,7 +1763,8 @@ void CIRGenFunction::emitAtomicStore(RValue rvalue, LValue dest, bool isInit) {
   bool isVolatile = dest.isVolatileQualified();
   auto order = cir::MemOrder::SequentiallyConsistent;
   if (!dest.getType()->isAtomicType()) {
-    assert(!cir::MissingFeatures::atomicMicrosoftVolatile());
+    order = cir::MemOrder::Release;
+    isVolatile = true;
   }
   return emitAtomicStore(rvalue, dest, order, isVolatile, isInit);
 }

@@ -953,6 +953,10 @@ public:
   // Finalize CIR code generation.
   void release();
 
+  void addDetectMismatch(StringRef name, StringRef value);
+  void addDependentLib(StringRef lib);
+  void appendLinkerOptions(StringRef opts);
+
   /// Returns a pointer to a global variable representing a temporary with
   /// static or thread storage duration.
   mlir::Operation *getAddrOfGlobalTemporary(const MaterializeTemporaryExpr *mte,
@@ -1071,6 +1075,8 @@ private:
   /// For languages without explicit address spaces, if D has default address
   /// space, target-specific global or constant address space may be returned.
   LangAS getGlobalVarAddressSpace(const VarDecl *decl);
+
+  SmallVector<std::string, 16> linkerOptions;
 };
 } // namespace CIRGen
 
