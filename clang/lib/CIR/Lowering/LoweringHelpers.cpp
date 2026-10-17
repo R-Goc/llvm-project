@@ -241,9 +241,10 @@ bool convertToDenseElementsAttrImpl(
       continue;
     }
 
-    // A global view can be the result of pointer conversions, so we can't
-    // represent them as an APInt/APFloat.  So give up if we see one.
-    if (auto global = mlir::dyn_cast<cir::GlobalViewAttr>(eltAttr))
+    // A global view or image-relative reference can be the result of pointer
+    // conversions, so we can't represent them as an APInt/APFloat. So give up
+    // if we see one.
+    if (mlir::isa<cir::GlobalViewAttr, cir::ImageRelativeAttr>(eltAttr))
       return false;
 
     llvm_unreachable("unknown element in ConstArrayAttr");

@@ -42,7 +42,8 @@ void createLLVMFuncOpIfNotExist(mlir::ConversionPatternRewriter &rewriter,
                                 mlir::Operation *srcOp, llvm::StringRef fnName,
                                 mlir::Type fnTy,
                                 mlir::ArrayAttr argAttrs = nullptr,
-                                mlir::ArrayAttr resAttrs = nullptr);
+                                mlir::ArrayAttr resAttrs = nullptr,
+                                mlir::LLVM::cconv::CConv *cconv = nullptr);
 
 struct LLVMBlockAddressInfo {
   // Get the next tag index

@@ -1030,6 +1030,18 @@ CIRAttrToValue::getAddressOfSymbol(mlir::FlatSymbolRefAttr symbol) {
   unsigned addrSpace = 0;
   llvm::StringRef symName;
   mlir::Operation *sourceSymbol = symbolTables.lookupSymbolIn(moduleOp, symbol);
+  if (!sourceSymbol && symbol.getValue() == "__ImageBase") {
+    mlir::OpBuilder::InsertionGuard guard(rewriter);
+    rewriter.setInsertionPointToStart(moduleOp.getBody());
+    auto i8Ty = mlir::IntegerType::get(rewriter.getContext(), 8);
+    auto imageBaseGlobal = mlir::LLVM::GlobalOp::create(
+        rewriter, parentOp->getLoc(), i8Ty, /*isConstant=*/true,
+        mlir::LLVM::Linkage::External, "__ImageBase", mlir::Attribute(),
+        /*alignment=*/0, addrSpace);
+    imageBaseGlobal.setDsoLocal(true);
+    symbolTables.getSymbolTable(moduleOp).insert(imageBaseGlobal);
+    sourceSymbol = imageBaseGlobal;
+  }
   if (auto llvmSymbol = dyn_cast<mlir::LLVM::GlobalOp>(sourceSymbol)) {
     sourceType = llvmSymbol.getType();
     symName = llvmSymbol.getSymName();
@@ -1174,6 +1186,32 @@ mlir::Value CIRAttrToValue::visitCirAttr(cir::GlobalOffsetAttr globalAttr) {
 
   return castGlobalAddrToType(addrOp, globalAttr.getType(), lowered.sourceType,
                               lowered.addrSpace);
+}
+
+mlir::Value CIRAttrToValue::visitCirAttr(cir::ImageRelativeAttr imageRelAttr) {
+  mlir::Location loc = parentOp->getLoc();
+  mlir::DataLayout layout(parentOp->getParentOfType<mlir::ModuleOp>());
+  mlir::MLIRContext *ctx = rewriter.getContext();
+  auto ptrTy = mlir::LLVM::LLVMPointerType::get(ctx);
+  mlir::Type intptrTy =
+      rewriter.getIntegerType(layout.getTypeSizeInBits(ptrTy));
+
+  mlir::Value symbolAddr = getAddressOfSymbol(imageRelAttr.getSymbol()).addr;
+  auto imageBaseSym = mlir::FlatSymbolRefAttr::get(ctx, "__ImageBase");
+  mlir::Value imageBaseAddr = getAddressOfSymbol(imageBaseSym).addr;
+
+  mlir::Value symbolInt =
+      mlir::LLVM::PtrToIntOp::create(rewriter, loc, intptrTy, symbolAddr);
+  mlir::Value imageBaseInt =
+      mlir::LLVM::PtrToIntOp::create(rewriter, loc, intptrTy, imageBaseAddr);
+  mlir::Value diff =
+      mlir::LLVM::SubOp::create(rewriter, loc, symbolInt, imageBaseInt);
+
+  mlir::Type resultTy = converter->convertType(imageRelAttr.getType());
+  mlir::Value result = diff;
+  if (resultTy != intptrTy)
+    result = mlir::LLVM::TruncOp::create(rewriter, loc, resultTy, diff);
+  return result;
 }
 
 // TypeInfoAttr visitor.
@@ -2456,6 +2494,33 @@ static void setLoweredCallAttributes(CallLikeOp op,
   }
 }
 
+struct MSVCEHState {
+  llvm::DenseMap<mlir::Block *, mlir::Value> blockPadMap;
+  llvm::DenseMap<mlir::Block *, mlir::Value> catchSwitchMap;
+  llvm::SmallPtrSet<mlir::Value, 4> catchPadTokens;
+};
+
+static thread_local MSVCEHState currentMSVCEHState;
+
+struct MSVCEHStateRAII {
+  MSVCEHStateRAII() { currentMSVCEHState = MSVCEHState(); }
+  ~MSVCEHStateRAII() { currentMSVCEHState = MSVCEHState(); }
+};
+
+static mlir::Value getFuncletPadToken(mlir::Operation *op) {
+  if (auto pad = currentMSVCEHState.blockPadMap.lookup(op->getBlock()))
+    return pad;
+  for (auto &currOp : *op->getBlock()) {
+    if (&currOp == op)
+      break;
+    if (auto padOp = mlir::dyn_cast<mlir::LLVM::CleanupPadOp>(&currOp))
+      return padOp.getResult();
+    if (auto padOp = mlir::dyn_cast<mlir::LLVM::CatchPadOp>(&currOp))
+      return padOp.getResult();
+  }
+  return nullptr;
+}
+
 static mlir::LogicalResult rewriteCallOrInvoke(
     mlir::Operation *op, mlir::ValueRange callOperands,
     mlir::ConversionPatternRewriter &rewriter,
@@ -2535,16 +2600,44 @@ static mlir::LogicalResult rewriteCallOrInvoke(
 
   mlir::LLVM::CConv cconv = convertCallingConv(call.getCallingConv());
 
+  auto mod = op->getParentOfType<mlir::ModuleOp>();
+  auto tripleAttr =
+      mod ? mod->getAttrOfType<mlir::StringAttr>(
+                cir::CIRDialect::getTripleAttrName())
+          : nullptr;
+  bool isMSVC = tripleAttr &&
+                llvm::Triple(tripleAttr.getValue()).isWindowsMSVCEnvironment();
+  mlir::Value currentPadToken = isMSVC ? getFuncletPadToken(op) : nullptr;
+
   if (landingPadBlock) {
     assert(!cir::MissingFeatures::opCallInvokeAttrs());
-    auto newOp = rewriter.replaceOpWithNewOp<mlir::LLVM::InvokeOp>(
-        op, llvmFnTy, calleeAttr, callOperands, continueBlock,
-        mlir::ValueRange{}, landingPadBlock, mlir::ValueRange{});
+    mlir::LLVM::InvokeOp newOp;
+    if (currentPadToken) {
+      SmallVector<mlir::Value> bundleArgs = {currentPadToken};
+      SmallVector<mlir::ValueRange> bundleRanges = {bundleArgs};
+      mlir::ArrayAttr bundleTags = rewriter.getStrArrayAttr({"funclet"});
+      newOp = rewriter.replaceOpWithNewOp<mlir::LLVM::InvokeOp>(
+          op, llvmResults, calleeAttr, callOperands, continueBlock,
+          landingPadBlock, bundleRanges, bundleTags);
+    } else {
+      newOp = rewriter.replaceOpWithNewOp<mlir::LLVM::InvokeOp>(
+          op, llvmFnTy, calleeAttr, callOperands, continueBlock,
+          mlir::ValueRange{}, landingPadBlock, mlir::ValueRange{});
+    }
     newOp.setCConv(cconv);
     setLoweredCallAttributes(newOp, attributes);
   } else {
-    auto newOp = rewriter.replaceOpWithNewOp<mlir::LLVM::CallOp>(
-        op, llvmFnTy, calleeAttr, callOperands);
+    mlir::LLVM::CallOp newOp;
+    if (currentPadToken) {
+      SmallVector<mlir::Value> bundleArgs = {currentPadToken};
+      SmallVector<mlir::ValueRange> bundleRanges = {bundleArgs};
+      mlir::ArrayAttr bundleTags = rewriter.getStrArrayAttr({"funclet"});
+      newOp = rewriter.replaceOpWithNewOp<mlir::LLVM::CallOp>(
+          op, llvmResults, calleeAttr, callOperands, bundleRanges, bundleTags);
+    } else {
+      newOp = rewriter.replaceOpWithNewOp<mlir::LLVM::CallOp>(
+          op, llvmFnTy, calleeAttr, callOperands);
+    }
     newOp.setCConv(cconv);
     setLoweredCallAttributes(newOp, attributes);
     if (memoryEffects)
@@ -4364,6 +4457,15 @@ static void prepareTypeConverter(mlir::LLVMTypeConverter &converter,
   converter.addConversion([&](cir::VoidType type) -> mlir::Type {
     return mlir::LLVM::LLVMVoidType::get(type.getContext());
   });
+  converter.addConversion([&](cir::CleanupTokenType) {
+    return mlir::TokenType::get(&converter.getContext());
+  });
+  converter.addConversion([&](cir::CatchTokenType) {
+    return mlir::TokenType::get(&converter.getContext());
+  });
+  converter.addConversion([&](cir::EhTokenType) {
+    return mlir::TokenType::get(&converter.getContext());
+  });
 }
 static void buildCtorDtorList(
     mlir::ModuleOp module, StringRef globalXtorName, StringRef llvmXtorName,
@@ -4740,6 +4842,303 @@ void ConvertCIRToLLVMPass::processCIRAttrs(mlir::ModuleOp module) {
   lowerOpenCLModuleMetadataAttrs(module);
 }
 
+class CIRToLLVMBeginCleanupOpLowering
+    : public mlir::OpConversionPattern<cir::BeginCleanupOp> {
+public:
+  using mlir::OpConversionPattern<cir::BeginCleanupOp>::OpConversionPattern;
+
+  mlir::LogicalResult
+  matchAndRewrite(cir::BeginCleanupOp op, OpAdaptor adaptor,
+                  mlir::ConversionPatternRewriter &rewriter) const override {
+    mlir::Location loc = op.getLoc();
+    mlir::Value parentPad = adaptor.getEhToken();
+    if (!parentPad || !isa<mlir::TokenType>(parentPad.getType())) {
+      parentPad = mlir::LLVM::NoneTokenOp::create(
+          rewriter, loc, mlir::TokenType::get(rewriter.getContext()));
+    }
+    auto cleanuppad = mlir::LLVM::CleanupPadOp::create(
+        rewriter, loc, parentPad, mlir::ValueRange{});
+    mlir::Value padToken = cleanuppad.getResult();
+
+    // Associate cleanuppad.getResult() with the current block and any blocks in
+    // this cleanup scope.
+    currentMSVCEHState.blockPadMap[op->getBlock()] = padToken;
+    SmallVector<mlir::Block *, 4> worklist;
+    llvm::SmallPtrSet<mlir::Block *, 8> visited;
+    worklist.push_back(op->getBlock());
+    visited.insert(op->getBlock());
+    while (!worklist.empty()) {
+      mlir::Block *curr = worklist.pop_back_val();
+      currentMSVCEHState.blockPadMap[curr] = padToken;
+      bool isExit = false;
+      for (auto &currOp : *curr) {
+        if (mlir::isa<cir::ResumeOp, cir::EndCleanupOp>(&currOp)) {
+          isExit = true;
+          break;
+        }
+      }
+      if (!isExit) {
+        for (mlir::Block *succ : curr->getSuccessors()) {
+          if (visited.insert(succ).second)
+            worklist.push_back(succ);
+        }
+      }
+    }
+
+    rewriter.replaceOp(op, padToken);
+    return mlir::success();
+  }
+};
+
+class CIRToLLVMEndCleanupOpLowering
+    : public mlir::OpConversionPattern<cir::EndCleanupOp> {
+public:
+  using mlir::OpConversionPattern<cir::EndCleanupOp>::OpConversionPattern;
+
+  mlir::LogicalResult
+  matchAndRewrite(cir::EndCleanupOp op, OpAdaptor adaptor,
+                  mlir::ConversionPatternRewriter &rewriter) const override {
+    rewriter.eraseOp(op);
+    return mlir::success();
+  }
+};
+
+class CIRToLLVMResumeOpLowering
+    : public mlir::OpConversionPattern<cir::ResumeOp> {
+public:
+  using mlir::OpConversionPattern<cir::ResumeOp>::OpConversionPattern;
+
+  mlir::LogicalResult
+  matchAndRewrite(cir::ResumeOp op, OpAdaptor adaptor,
+                  mlir::ConversionPatternRewriter &rewriter) const override {
+    auto mod = op->getParentOfType<mlir::ModuleOp>();
+    auto tripleAttr = mod ? mod->getAttrOfType<mlir::StringAttr>(
+                                cir::CIRDialect::getTripleAttrName())
+                          : nullptr;
+    if (tripleAttr &&
+        llvm::Triple(tripleAttr.getValue()).isWindowsMSVCEnvironment()) {
+      mlir::Value currentPadToken = getFuncletPadToken(op);
+      if (!currentPadToken ||
+          currentMSVCEHState.catchPadTokens.contains(currentPadToken)) {
+        rewriter.replaceOpWithNewOp<mlir::LLVM::UnreachableOp>(op);
+        return mlir::success();
+      }
+
+      rewriter.replaceOpWithNewOp<mlir::LLVM::CleanupRetOp>(
+          op, currentPadToken, /*unwindDest=*/nullptr);
+      return mlir::success();
+    }
+    return op->emitError(
+        "cir.resume lowering only implemented for MSVC target");
+  }
+};
+
+class CIRToLLVMEhInitiateOpLowering
+    : public mlir::OpConversionPattern<cir::EhInitiateOp> {
+public:
+  using mlir::OpConversionPattern<cir::EhInitiateOp>::OpConversionPattern;
+
+  mlir::LogicalResult
+  matchAndRewrite(cir::EhInitiateOp op, OpAdaptor adaptor,
+                  mlir::ConversionPatternRewriter &rewriter) const override {
+    auto mod = op->getParentOfType<mlir::ModuleOp>();
+    auto tripleAttr = mod ? mod->getAttrOfType<mlir::StringAttr>(
+                                cir::CIRDialect::getTripleAttrName())
+                          : nullptr;
+    if (tripleAttr &&
+        llvm::Triple(tripleAttr.getValue()).isWindowsMSVCEnvironment()) {
+      auto noneToken = mlir::LLVM::NoneTokenOp::create(
+          rewriter, op.getLoc(), mlir::TokenType::get(rewriter.getContext()));
+      rewriter.replaceOp(op, noneToken.getResult());
+      return mlir::success();
+    }
+    return op->emitError(
+        "cir.eh.initiate direct LLVM lowering only supported for MSVC");
+  }
+};
+
+class CIRToLLVMEhTerminateOpLowering
+    : public mlir::OpConversionPattern<cir::EhTerminateOp> {
+public:
+  using mlir::OpConversionPattern<cir::EhTerminateOp>::OpConversionPattern;
+
+  mlir::LogicalResult
+  matchAndRewrite(cir::EhTerminateOp op, OpAdaptor adaptor,
+                  mlir::ConversionPatternRewriter &rewriter) const override {
+    mlir::Location loc = op.getLoc();
+    auto mod = op->getParentOfType<mlir::ModuleOp>();
+    auto tripleAttr = mod ? mod->getAttrOfType<mlir::StringAttr>(
+                                cir::CIRDialect::getTripleAttrName())
+                          : nullptr;
+    if (tripleAttr &&
+        llvm::Triple(tripleAttr.getValue()).isWindowsMSVCEnvironment()) {
+      mlir::Value parentPad = adaptor.getEhToken();
+      if (!parentPad || !isa<mlir::TokenType>(parentPad.getType())) {
+        parentPad = mlir::LLVM::NoneTokenOp::create(
+            rewriter, loc, mlir::TokenType::get(rewriter.getContext()));
+      }
+      auto cleanuppad = mlir::LLVM::CleanupPadOp::create(
+          rewriter, loc, parentPad, mlir::ValueRange{});
+      mlir::Value padToken = cleanuppad.getResult();
+
+      SmallVector<mlir::Value> bundleArgs = {padToken};
+      SmallVector<mlir::ValueRange> bundleRanges = {bundleArgs};
+      mlir::ArrayAttr bundleTags = rewriter.getStrArrayAttr({"funclet"});
+
+      auto stdTermSym = mlir::FlatSymbolRefAttr::get(rewriter.getContext(),
+                                                     "__std_terminate");
+      auto callOp = mlir::LLVM::CallOp::create(
+          rewriter, loc, mlir::TypeRange{}, stdTermSym, mlir::ValueRange{},
+          bundleRanges, bundleTags);
+      callOp.setNoUnwind(true);
+      callOp.setNoreturn(true);
+
+      mlir::LLVM::UnreachableOp::create(rewriter, loc);
+      rewriter.eraseOp(op);
+      return mlir::success();
+    }
+    return op->emitError(
+        "cir.eh.terminate direct LLVM lowering only supported for MSVC");
+  }
+};
+
+class CIRToLLVMEhDispatchOpLowering
+    : public mlir::OpConversionPattern<cir::EhDispatchOp> {
+public:
+  using mlir::OpConversionPattern<cir::EhDispatchOp>::OpConversionPattern;
+
+  mlir::LogicalResult
+  matchAndRewrite(cir::EhDispatchOp op, OpAdaptor adaptor,
+                  mlir::ConversionPatternRewriter &rewriter) const override {
+    mlir::Location loc = op.getLoc();
+    mlir::Value parentPad = getFuncletPadToken(op);
+    if (!parentPad || !mlir::isa<mlir::TokenType>(parentPad.getType())) {
+      parentPad = mlir::LLVM::NoneTokenOp::create(
+          rewriter, loc, mlir::TokenType::get(rewriter.getContext()));
+    }
+
+    SmallVector<mlir::Block *> handlers;
+    for (mlir::Block *handler : op.getCatchDestinations())
+      handlers.push_back(handler);
+
+    mlir::Block *unwindDest = nullptr;
+    if (op.getDefaultIsCatchAll()) {
+      handlers.push_back(op.getDefaultDestination());
+    } else {
+      mlir::Block *defBlock = op.getDefaultDestination();
+      bool isTrivialResume = false;
+      if (defBlock) {
+
+        auto it = defBlock->begin();
+        if (it != defBlock->end() && mlir::isa<cir::EhInitiateOp>(&*it))
+          ++it;
+        if (it != defBlock->end() && mlir::isa<cir::ResumeOp>(&*it))
+          isTrivialResume = true;
+      }
+      if (!isTrivialResume)
+        unwindDest = defBlock;
+    }
+
+    auto csOp = mlir::LLVM::CatchSwitchOp::create(
+        rewriter, loc, parentPad, handlers, unwindDest);
+    mlir::Value csToken = csOp.getResult();
+
+    for (mlir::Block *handler : handlers)
+      currentMSVCEHState.catchSwitchMap[handler] = csToken;
+
+    rewriter.eraseOp(op);
+    return mlir::success();
+  }
+};
+
+class CIRToLLVMBeginCatchOpLowering
+    : public mlir::OpConversionPattern<cir::BeginCatchOp> {
+public:
+  using mlir::OpConversionPattern<cir::BeginCatchOp>::OpConversionPattern;
+
+  mlir::LogicalResult
+  matchAndRewrite(cir::BeginCatchOp op, OpAdaptor adaptor,
+                  mlir::ConversionPatternRewriter &rewriter) const override {
+    mlir::Location loc = op.getLoc();
+    mlir::Value csToken =
+        currentMSVCEHState.catchSwitchMap.lookup(op->getBlock());
+    if (!csToken)
+      return op->emitError(
+          "Could not find catchswitch token for cir.begin_catch");
+
+    auto llvmPtrTy = mlir::LLVM::LLVMPointerType::get(rewriter.getContext());
+    mlir::Value arg0;
+    if (op.getTypeInfoAttr()) {
+      arg0 = mlir::LLVM::AddressOfOp::create(
+          rewriter, loc, llvmPtrTy, op.getTypeInfoAttr().getSymbol());
+    } else {
+      arg0 = mlir::LLVM::ZeroOp::create(rewriter, loc, llvmPtrTy);
+    }
+
+    auto i32Ty = rewriter.getI32Type();
+    int32_t flags = op.getFlagsAttr() ? op.getFlagsAttr().getInt() : 0;
+    mlir::Value arg1 =
+        mlir::LLVM::ConstantOp::create(rewriter, loc, i32Ty, flags);
+
+    mlir::Value arg2 = adaptor.getParamAddr();
+    if (!arg2)
+      arg2 = mlir::LLVM::ZeroOp::create(rewriter, loc, llvmPtrTy);
+
+    auto catchPad = mlir::LLVM::CatchPadOp::create(
+        rewriter, loc, csToken, mlir::ValueRange{arg0, arg1, arg2});
+    mlir::Value cpToken = catchPad.getResult();
+
+    currentMSVCEHState.catchPadTokens.insert(cpToken);
+
+    llvm::SmallPtrSet<mlir::Block *, 4> exitBlocks;
+    for (mlir::Operation *user : op.getCatchToken().getUsers()) {
+      if (mlir::isa<cir::EndCatchOp>(user))
+        exitBlocks.insert(user->getBlock());
+    }
+
+    currentMSVCEHState.blockPadMap[op->getBlock()] = cpToken;
+    SmallVector<mlir::Block *, 4> worklist;
+    llvm::SmallPtrSet<mlir::Block *, 8> visited;
+    worklist.push_back(op->getBlock());
+    visited.insert(op->getBlock());
+    while (!worklist.empty()) {
+      mlir::Block *curr = worklist.pop_back_val();
+      currentMSVCEHState.blockPadMap[curr] = cpToken;
+      bool isExit = exitBlocks.contains(curr);
+      if (!isExit) {
+        for (auto &currOp : *curr) {
+          if (mlir::isa<cir::EndCatchOp>(&currOp)) {
+            isExit = true;
+            break;
+          }
+        }
+      }
+      if (!isExit) {
+        for (mlir::Block *succ : curr->getSuccessors()) {
+          if (visited.insert(succ).second)
+            worklist.push_back(succ);
+        }
+      }
+    }
+
+    rewriter.replaceOp(op, mlir::ValueRange{cpToken, arg2});
+    return mlir::success();
+  }
+};
+
+class CIRToLLVMEndCatchOpLowering
+    : public mlir::OpConversionPattern<cir::EndCatchOp> {
+public:
+  using mlir::OpConversionPattern<cir::EndCatchOp>::OpConversionPattern;
+
+  mlir::LogicalResult
+  matchAndRewrite(cir::EndCatchOp op, OpAdaptor adaptor,
+                  mlir::ConversionPatternRewriter &rewriter) const override {
+    rewriter.eraseOp(op);
+    return mlir::success();
+  }
+};
+
 void ConvertCIRToLLVMPass::runOnOperation() {
   llvm::TimeTraceScope scope("Convert CIR to LLVM Pass");
 
@@ -4753,6 +5152,7 @@ void ConvertCIRToLLVMPass::runOnOperation() {
   /// of unresolved `BlockAddressOp`s until they are matched with the
   /// corresponding `BlockTagOp` in `resolveBlockAddressOp`.
   LLVMBlockAddressInfo blockInfoAddr;
+  MSVCEHStateRAII msvcEHStateGuard;
   /// Cached symbol table collection used by call lowering patterns to avoid
   /// repeated O(M) module-wide symbol scans for every call site.
   mlir::SymbolTableCollection symbolTables;
@@ -4766,6 +5166,16 @@ void ConvertCIRToLLVMPass::runOnOperation() {
 #include "clang/CIR/Dialect/IR/CIRLowering.inc"
 #undef GET_LLVM_LOWERING_PATTERNS_LIST
       >(converter, patterns.getContext(), dl, symbolTables);
+
+  patterns.add<CIRToLLVMBeginCleanupOpLowering,
+               CIRToLLVMEndCleanupOpLowering,
+               CIRToLLVMResumeOpLowering,
+               CIRToLLVMEhInitiateOpLowering,
+               CIRToLLVMEhTerminateOpLowering,
+               CIRToLLVMEhDispatchOpLowering,
+               CIRToLLVMBeginCatchOpLowering,
+               CIRToLLVMEndCatchOpLowering>(
+      converter, patterns.getContext());
 
   processCIRAttrs(module);
 
@@ -4835,6 +5245,45 @@ void ConvertCIRToLLVMPass::runOnOperation() {
 mlir::LogicalResult CIRToLLVMBrOpLowering::matchAndRewrite(
     cir::BrOp op, OpAdaptor adaptor,
     mlir::ConversionPatternRewriter &rewriter) const {
+  auto mod = op->getParentOfType<mlir::ModuleOp>();
+  auto tripleAttr = mod ? mod->getAttrOfType<mlir::StringAttr>(
+                              cir::CIRDialect::getTripleAttrName())
+                        : nullptr;
+  const bool isMSVC =
+      tripleAttr &&
+      llvm::Triple(tripleAttr.getValue()).isWindowsMSVCEnvironment();
+
+  if (isMSVC) {
+    if (mlir::Value currentPadToken = getFuncletPadToken(op)) {
+      if (currentMSVCEHState.catchPadTokens.contains(currentPadToken)) {
+        if (currentMSVCEHState.blockPadMap.lookup(op.getDest()) !=
+            currentPadToken) {
+          rewriter.replaceOpWithNewOp<mlir::LLVM::CatchRetOp>(
+              op, currentPadToken, op.getDest());
+          return mlir::LogicalResult::success();
+        }
+      } else {
+        // currentPadToken is a cleanuppad
+        if (currentMSVCEHState.blockPadMap.lookup(op.getDest()) !=
+            currentPadToken) {
+          mlir::Block *destBlock = op.getDest();
+          bool isTrivialResume = false;
+          if (destBlock) {
+            auto it = destBlock->begin();
+            if (it != destBlock->end() && mlir::isa<cir::EhInitiateOp>(&*it))
+              ++it;
+            if (it != destBlock->end() && mlir::isa<cir::ResumeOp>(&*it))
+              isTrivialResume = true;
+          }
+          mlir::Block *unwindDest = isTrivialResume ? nullptr : destBlock;
+          rewriter.replaceOpWithNewOp<mlir::LLVM::CleanupRetOp>(
+              op, currentPadToken, unwindDest);
+          return mlir::LogicalResult::success();
+        }
+      }
+    }
+  }
+
   rewriter.replaceOpWithNewOp<mlir::LLVM::BrOp>(op, adaptor.getOperands(),
                                                 op.getDest());
   return mlir::LogicalResult::success();
@@ -4905,11 +5354,11 @@ mlir::LogicalResult CIRToLLVMInsertMemberOpLowering::matchAndRewrite(
   return mlir::success();
 }
 
-void createLLVMFuncOpIfNotExist(mlir::ConversionPatternRewriter &rewriter,
-                                mlir::SymbolTableCollection &symbolTables,
-                                mlir::Operation *srcOp, llvm::StringRef fnName,
-                                mlir::Type fnTy, mlir::ArrayAttr argAttrs,
-                                mlir::ArrayAttr resAttrs) {
+void createLLVMFuncOpIfNotExist(
+    mlir::ConversionPatternRewriter &rewriter,
+    mlir::SymbolTableCollection &symbolTables, mlir::Operation *srcOp,
+    llvm::StringRef fnName, mlir::Type fnTy, mlir::ArrayAttr argAttrs,
+    mlir::ArrayAttr resAttrs, mlir::LLVM::cconv::CConv *cconv) {
   mlir::ModuleOp modOp = srcOp->getParentOfType<mlir::ModuleOp>();
   mlir::Operation *sourceSymbol = symbolTables.lookupSymbolIn(
       modOp, mlir::StringAttr::get(fnTy.getContext(), fnName));
@@ -4923,8 +5372,17 @@ void createLLVMFuncOpIfNotExist(mlir::ConversionPatternRewriter &rewriter,
       fn.setArgAttrsAttr(argAttrs);
     if (resAttrs)
       fn.setResAttrsAttr(resAttrs);
+    if (cconv)
+      fn.setCConv(*cconv);
     // Update the symbol table.
     symbolTables.getSymbolTable(fn->getParentOp()).insert(fn);
+  } else if (cconv) {
+    if (auto llvmFn = dyn_cast<mlir::LLVM::LLVMFuncOp>(sourceSymbol))
+      llvmFn.setCConv(*cconv);
+    else if (auto cirFn = dyn_cast<cir::FuncOp>(sourceSymbol)) {
+      if (*cconv == mlir::LLVM::cconv::CConv::X86_StdCall)
+        cirFn.setCallingConv(cir::CallingConv::X86_StdCall);
+    }
   }
 }
 
@@ -4933,6 +5391,51 @@ mlir::LogicalResult CIRToLLVMThrowOpLowering::matchAndRewrite(
     mlir::ConversionPatternRewriter &rewriter) const {
   mlir::Location loc = op.getLoc();
   auto voidTy = mlir::LLVM::LLVMVoidType::get(getContext());
+  auto llvmPtrTy = mlir::LLVM::LLVMPointerType::get(rewriter.getContext());
+
+  mlir::ModuleOp moduleOp = op->getParentOfType<mlir::ModuleOp>();
+  llvm::Triple triple;
+  if (auto tripleAttr = mlir::dyn_cast_or_null<mlir::StringAttr>(
+          moduleOp->getAttr(cir::CIRDialect::getTripleAttrName()))) {
+    triple = llvm::Triple(tripleAttr.getValue());
+  } else if (auto tripleAttr =
+                 mlir::dyn_cast_or_null<mlir::StringAttr>(moduleOp->getAttr(
+                     mlir::LLVM::LLVMDialect::getTargetTripleAttrName()))) {
+    triple = llvm::Triple(tripleAttr.getValue());
+  }
+
+  if (triple.isWindowsMSVCEnvironment()) {
+    const llvm::StringRef fnName = "_CxxThrowException";
+    auto fnTy =
+        mlir::LLVM::LLVMFunctionType::get(voidTy, {llvmPtrTy, llvmPtrTy});
+    std::optional<mlir::LLVM::cconv::CConv> cconv;
+    if (triple.getArch() == llvm::Triple::x86)
+      cconv = mlir::LLVM::cconv::CConv::X86_StdCall;
+
+    createLLVMFuncOpIfNotExist(rewriter, symbolTables, op, fnName, fnTy,
+                               /*argAttrs=*/nullptr, /*resAttrs=*/nullptr,
+                               cconv ? &*cconv : nullptr);
+
+    mlir::Value pException;
+    mlir::Value pThrowInfo;
+    if (op.rethrows()) {
+      pException = mlir::LLVM::ZeroOp::create(rewriter, loc, llvmPtrTy);
+      pThrowInfo = mlir::LLVM::ZeroOp::create(rewriter, loc, llvmPtrTy);
+    } else {
+      pException = adaptor.getExceptionPtr();
+      pThrowInfo = mlir::LLVM::AddressOfOp::create(rewriter, loc, llvmPtrTy,
+                                                   adaptor.getTypeInfoAttr());
+    }
+
+    auto callOp =
+        mlir::LLVM::CallOp::create(rewriter, loc, mlir::TypeRange{}, fnName,
+                                   mlir::ValueRange{pException, pThrowInfo});
+    if (cconv)
+      callOp.setCConv(*cconv);
+
+    rewriter.replaceOp(op, callOp);
+    return mlir::success();
+  }
 
   // TODO(cir): set the runtime calling convention on the runtime calls below.
   assert(!cir::MissingFeatures::opFuncCallingConv());
@@ -4952,7 +5455,6 @@ mlir::LogicalResult CIRToLLVMThrowOpLowering::matchAndRewrite(
     return mlir::success();
   }
 
-  auto llvmPtrTy = mlir::LLVM::LLVMPointerType::get(rewriter.getContext());
   auto fnTy = mlir::LLVM::LLVMFunctionType::get(
       voidTy, {llvmPtrTy, llvmPtrTy, llvmPtrTy});
 
@@ -4961,8 +5463,7 @@ mlir::LogicalResult CIRToLLVMThrowOpLowering::matchAndRewrite(
   createLLVMFuncOpIfNotExist(rewriter, symbolTables, op, fnName, fnTy);
 
   mlir::Value typeInfo = mlir::LLVM::AddressOfOp::create(
-      rewriter, loc, mlir::LLVM::LLVMPointerType::get(rewriter.getContext()),
-      adaptor.getTypeInfoAttr());
+      rewriter, loc, llvmPtrTy, adaptor.getTypeInfoAttr());
 
   mlir::Value dtor;
   if (op.getDtor()) {

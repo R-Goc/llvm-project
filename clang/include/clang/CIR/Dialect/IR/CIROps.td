@@ -9684,12 +9684,19 @@ def CIR_BeginCatchOp : CIR_Op<"begin_catch"> {
     ```
   }];
 
-  let arguments = (ins CIR_EhTokenType:$eh_token);
+  let arguments = (ins
+    CIR_EhTokenType:$eh_token,
+    Optional<CIR_PointerType>:$param_addr,
+    OptionalAttr<CIR_GlobalViewAttr>:$type_info,
+    OptionalAttr<I32Attr>:$flags
+  );
   let results = (outs CIR_CatchTokenType:$catch_token,
                       CIR_PointerType:$exn_ptr);
 
   let assemblyFormat = [{
-    $eh_token `:` type($eh_token) `->` `(` type($catch_token) `,`
+    $eh_token (`param` $param_addr^ `:` qualified(type($param_addr)))?
+    (`type` $type_info^)? (`flags` $flags^)?
+    `:` type($eh_token) `->` `(` type($catch_token) `,`
        qualified(type($exn_ptr)) `)` attr-dict
   }];
 

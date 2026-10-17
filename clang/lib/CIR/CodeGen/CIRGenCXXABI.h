@@ -185,6 +185,9 @@ public:
   getAddrOfCXXCatchHandlerType(mlir::Location loc, QualType ty,
                                QualType catchHandlerType) = 0;
   virtual CatchTypeInfo getCatchAllTypeInfo();
+  virtual cir::GlobalOp getThrowInfo(mlir::Location loc, QualType throwType) {
+    return nullptr;
+  }
   virtual bool shouldTypeidBeNullChecked(QualType srcTy) = 0;
   virtual mlir::Value emitTypeid(CIRGenFunction &cgf, QualType srcTy,
                                  Address thisPtr, mlir::Type typeInfoPtrTy) = 0;

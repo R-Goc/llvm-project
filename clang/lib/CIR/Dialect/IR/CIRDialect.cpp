@@ -834,6 +834,13 @@ static LogicalResult checkConstantTypes(mlir::Operation *op, mlir::Type opType,
     return success();
   }
 
+  if (mlir::isa<cir::ImageRelativeAttr>(attrType)) {
+    if (!mlir::isa<cir::IntType>(opType))
+      return op->emitOpError(
+          "image-relative displacement expects integer type");
+    return success();
+  }
+
   if (isa<cir::DataMemberAttr, cir::DataMemberOffsetAttr, cir::MethodAttr>(
           attrType)) {
     // More detailed type verifications are already done in
