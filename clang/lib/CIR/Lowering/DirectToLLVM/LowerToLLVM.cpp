@@ -7012,6 +7012,15 @@ lowerDirectlyFromCIRToLLVMIR(mlir::ModuleOp mlirModule, LLVMContext &llvmCtx,
                              llvm::vfs::FileSystem *fs) {
   llvm::TimeTraceScope scope("lower from CIR to LLVM directly");
 
+  llvm::StringMap<cir::DLLStorageClass> dllStorageClasses;
+  for (auto &op : mlirModule.getOps()) {
+    if (auto gv = mlir::dyn_cast<cir::CIRGlobalValueInterface>(&op)) {
+      if (gv.getDLLStorageClass() != cir::DLLStorageClass::DefaultStorageClass)
+        dllStorageClasses[gv.getNameAttr().getValue()] =
+            gv.getDLLStorageClass();
+    }
+  }
+
   mlir::MLIRContext *mlirCtx = mlirModule.getContext();
 
   mlir::PassManager pm(mlirCtx);
@@ -7041,6 +7050,17 @@ lowerDirectlyFromCIRToLLVMIR(mlir::ModuleOp mlirModule, LLVMContext &llvmCtx,
   StringRef moduleName = mlirModule.getName().value_or("CIRToLLVMModule");
   std::unique_ptr<llvm::Module> llvmModule = mlir::translateModuleToLLVMIR(
       mlirModule, llvmCtx, moduleName, /*disableVerification=*/false, fs);
+
+  assert(llvmModule);
+
+  for (const auto &entry : dllStorageClasses) {
+    if (llvm::GlobalValue *gv = llvmModule->getNamedValue(entry.first())) {
+      if (entry.second == cir::DLLStorageClass::DLLImportStorageClass)
+        gv->setDLLStorageClass(llvm::GlobalValue::DLLImportStorageClass);
+      else if (entry.second == cir::DLLStorageClass::DLLExportStorageClass)
+        gv->setDLLStorageClass(llvm::GlobalValue::DLLExportStorageClass);
+    }
+  }
 
   return llvmModule;
 }

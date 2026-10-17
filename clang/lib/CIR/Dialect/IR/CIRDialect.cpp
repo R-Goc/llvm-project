@@ -333,6 +333,7 @@ template <typename Ty> struct EnumTraits {};
 
 REGISTER_ENUM_TYPE(GlobalLinkageKind);
 REGISTER_ENUM_TYPE(VisibilityKind);
+REGISTER_ENUM_TYPE(DLLStorageClass);
 REGISTER_ENUM_TYPE(CallingConv);
 } // namespace
 
@@ -1672,6 +1673,7 @@ verifyCallCommInSymbolUses(mlir::Operation *op,
   // An indirect call is checked against the function type its callee pointer
   // points to, and a direct call against its callee's declaration.
   cir::FuncType fnType;
+  cir::FuncOp fn;
   bool hasPrototype = true;
   auto fnAttr =
       op->getAttrOfType<FlatSymbolRefAttr>(CIRDialect::getCalleeAttrName());
@@ -1686,7 +1688,7 @@ verifyCallCommInSymbolUses(mlir::Operation *op,
              << "indirect callee must be a pointer to a function, but has type "
              << calleeTy;
   } else {
-    auto fn = symbolTable.lookupNearestSymbolFrom<cir::FuncOp>(op, fnAttr);
+    fn = symbolTable.lookupNearestSymbolFrom<cir::FuncOp>(op, fnAttr);
     if (!fn)
       return op->emitOpError() << "'" << fnAttr.getValue()
                                << "' does not reference a valid function";
@@ -1713,7 +1715,11 @@ verifyCallCommInSymbolUses(mlir::Operation *op,
                << i;
   }
 
-  assert(!cir::MissingFeatures::opCallCallConv());
+  if (fn && callIf.getCallingConv() != fn.getCallingConv())
+    return op->emitOpError("calling convention mismatch between call (")
+           << stringifyCallingConv(callIf.getCallingConv())
+           << ") and callee ("
+           << stringifyCallingConv(fn.getCallingConv()) << ")";
 
   // Void function must not return any results.
   if (fnType.hasVoidReturn() && op->getNumResults() != 0)
@@ -2955,8 +2961,24 @@ ParseResult cir::FuncOp::parse(OpAsmParser &parser, OperationState &state) {
   state.getOrAddProperties<cir::FuncOp::Properties>().global_visibility =
       parseOptionalCIRKeyword(parser, cir::VisibilityKind::Default);
 
-  if (parser.parseOptionalKeyword(dsoLocalNameAttr).succeeded())
-    state.addAttribute(dsoLocalNameAttr, parser.getBuilder().getUnitAttr());
+  for (int i = 0; i < 2; ++i) {
+    if (!state.attributes.get(dsoLocalNameAttr) &&
+        parser.parseOptionalKeyword(dsoLocalNameAttr).succeeded()) {
+      state.addAttribute(dsoLocalNameAttr, parser.getBuilder().getUnitAttr());
+      continue;
+    }
+    if (state.getOrAddProperties<cir::FuncOp::Properties>().dll_storage_class ==
+        cir::DLLStorageClass::DefaultStorageClass) {
+      auto sc = parseOptionalCIRKeyword(
+          parser, cir::DLLStorageClass::DefaultStorageClass);
+      if (sc != cir::DLLStorageClass::DefaultStorageClass) {
+        state.getOrAddProperties<cir::FuncOp::Properties>().dll_storage_class =
+            sc;
+        continue;
+      }
+    }
+    break;
+  }
 
   StringAttr nameAttr;
   if (parser.parseSymbolName(nameAttr, getSymNameAttrName(state.name),
@@ -3267,6 +3289,9 @@ void cir::FuncOp::print(OpAsmPrinter &p) {
 
   if (getDsoLocal())
     p << " dso_local";
+
+  if (getDllStorageClass() != cir::DLLStorageClass::DefaultStorageClass)
+    p << ' ' << stringifyDLLStorageClass(getDllStorageClass());
 
   p << ' ';
   p.printSymbolName(getSymName());

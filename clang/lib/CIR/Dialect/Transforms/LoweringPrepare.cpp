@@ -182,6 +182,8 @@ struct LoweringPreparePass
   /// Materialize global ctor/dtor list
   void buildGlobalCtorDtorList();
 
+  /// Append a global to llvm.used.
+  void addUsedGlobal(cir::GlobalOp gv);
 
   cir::FuncOp buildRuntimeFunction(
       mlir::OpBuilder &builder, llvm::StringRef name, mlir::Location loc,
@@ -264,9 +266,6 @@ struct LoweringPreparePass
                                     cir::IntType guardTy,
                                     cir::GlobalLinkageKind linkage);
 
-  /// Append 'global' to the module's llvm.used list to make sure it doesn't get
-  /// garbage-collected by the linker.
-  void addUsedGlobal(cir::GlobalOp global);
 
   /// Get the guard variable for a static local declaration.
   cir::GlobalOp getStaticLocalDeclGuardAddress(llvm::StringRef globalSymName) {
@@ -324,6 +323,7 @@ struct LoweringPreparePass
       guard.setAlignment(guardAlignment.getAsAlign().value());
       guard.setTlsModel(globalOp.getTlsModel());
       guard.setGlobalVisibility(globalOp.getGlobalVisibility());
+      guard.setDLLStorageClass(globalOp.getDLLStorageClass());
 
       // The ABI says: "It is suggested that it be emitted in the same COMDAT
       // group as the associated data object." In practice, this doesn't work
@@ -513,6 +513,7 @@ struct LoweringPreparePass
             varDecl->getASTContext().createMangleContext());
         mangleCtx->mangleDynamicAtExitDestructor(varDecl, out);
       }
+
 
       // Create nullary dtor stub function: void ??__F...()
       cir::CIRBaseBuilderTy globalBuilder(getContext());
@@ -1493,6 +1494,7 @@ LoweringPreparePass::buildCXXGlobalVarDeclInitFunc(cir::GlobalOp op) {
       linkage = cir::GlobalLinkageKind::LinkOnceODRLinkage;
     }
   }
+
 
   if (fnName.empty()) {
     fnName = "__cxx_global_var_init";
