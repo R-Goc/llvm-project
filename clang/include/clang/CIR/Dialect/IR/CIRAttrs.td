@@ -1308,6 +1308,25 @@ def CIR_GlobalOffsetAttr : CIR_ValueLikeAttr<"GlobalOffset", "global_offset"> {
 }
 
 //===----------------------------------------------------------------------===//
+// ImageRelativeAttr
+//===----------------------------------------------------------------------===//
+
+def CIR_ImageRelativeAttr : CIR_ValueLikeAttr<"ImageRelative", "image_relative"> {
+  let summary = "Image-relative displacement to a global symbol";
+  let parameters = (ins AttributeSelfTypeParameter<"">:$type,
+                        "mlir::FlatSymbolRefAttr":$symbol);
+  let builders = [
+    AttrBuilderWithInferredContext<(ins "mlir::Type":$type,
+                                        "mlir::FlatSymbolRefAttr":$symbol), [{
+      return $_get(type.getContext(), type, symbol);
+    }]>
+  ];
+  let assemblyFormat = [{
+    `<` $symbol `>`
+  }];
+}
+
+//===----------------------------------------------------------------------===//
 // VTableAttr
 //===----------------------------------------------------------------------===//
 

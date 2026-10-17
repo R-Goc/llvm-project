@@ -922,6 +922,26 @@ CIRGenTypes::arrangeCXXStructorDeclaration(GlobalDecl gd) {
                                 fpt->getExtInfo(), required);
 }
 
+const CIRGenFunctionInfo &
+CIRGenTypes::arrangeMSCtorClosure(const CXXConstructorDecl *cd,
+                                  CXXCtorType ct) {
+  assert(ct == Ctor_CopyingClosure || ct == Ctor_DefaultClosure);
+
+  CanQual<FunctionProtoType> fpt = CodeGenUtils::getFormalType(cd);
+  SmallVector<CanQualType, 2> argTys;
+  const CXXRecordDecl *rd = cd->getParent();
+  argTys.push_back(deriveThisType(rd, cd));
+  if (ct == Ctor_CopyingClosure)
+    argTys.push_back(*fpt->param_type_begin());
+  if (rd->getNumVBases() > 0)
+    argTys.push_back(astContext.IntTy);
+  CallingConv cc = astContext.getDefaultCallingConvention(
+      /*IsVariadic=*/false, /*IsCXXMethod=*/true);
+  return arrangeCIRFunctionInfo(astContext.VoidTy, /*isInstanceMethod=*/true,
+                                argTys, FunctionType::ExtInfo(cc),
+                                RequiredArgs::All);
+}
+
 /// Derives the 'this' type for CIRGen purposes, i.e. ignoring method CVR
 /// qualification. Either or both of `rd` and `md` may be null. A null `rd`
 /// indicates that there is no meaningful 'this' type, and a null `md` can occur

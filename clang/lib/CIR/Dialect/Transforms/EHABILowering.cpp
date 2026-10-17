@@ -1120,6 +1120,320 @@ static void eraseCatchCopyThunks(mlir::ModuleOp mod) {
   }
 }
 
+//===----------------------------------------------------------------------===//
+// Microsoft EH ABI Lowering
+//===----------------------------------------------------------------------===//
+
+/// Lowers flattened CIR EH operations to the Microsoft C++ ABI form.
+class MicrosoftEHLowering : public EHABILowering {
+public:
+  using EHABILowering::EHABILowering;
+  mlir::LogicalResult run() override;
+
+private:
+  static constexpr llvm::StringLiteral kCxxFrameHandler3 = "__CxxFrameHandler3";
+
+  cir::FuncOp personalityFunc;
+  cir::FuncOp stdTerminateFunc;
+  cir::FuncOp cxxThrowFunc;
+
+  void ensurePersonalityDecl(mlir::Location loc);
+  void ensureStdTerminateDecl(mlir::Location loc);
+  void ensureCxxThrowDecl(mlir::Location loc);
+  mlir::LogicalResult lowerTryThrow(cir::TryThrowOp op);
+  mlir::LogicalResult lowerFunc(cir::FuncOp funcOp);
+};
+
+void MicrosoftEHLowering::ensurePersonalityDecl(mlir::Location loc) {
+  if (personalityFunc)
+    return;
+  if (auto existing = mod.lookupSymbol<cir::FuncOp>(kCxxFrameHandler3)) {
+    personalityFunc = existing;
+    return;
+  }
+  auto s32Type = cir::IntType::get(ctx, 32, /*isSigned=*/true);
+  auto personalityFuncTy = cir::FuncType::get({}, s32Type, /*isVarArg=*/true);
+  personalityFunc = getOrCreateRuntimeFuncDecl(mod, loc, kCxxFrameHandler3,
+                                               personalityFuncTy);
+  personalityFunc.setDsoLocal(true);
+}
+
+void MicrosoftEHLowering::ensureStdTerminateDecl(mlir::Location loc) {
+  if (stdTerminateFunc)
+    return;
+  if (auto existing = mod.lookupSymbol<cir::FuncOp>("__std_terminate")) {
+    stdTerminateFunc = existing;
+    return;
+  }
+  auto voidType = cir::VoidType::get(ctx);
+  auto funcTy = cir::FuncType::get({}, voidType, /*isVarArg=*/false);
+  stdTerminateFunc =
+      getOrCreateRuntimeFuncDecl(mod, loc, "__std_terminate", funcTy);
+  stdTerminateFunc.setDsoLocal(true);
+  stdTerminateFunc->setAttr(cir::CIRDialect::getNoReturnAttrName(),
+                            builder.getUnitAttr());
+  stdTerminateFunc->setAttr(cir::CIRDialect::getNoThrowAttrName(),
+                            builder.getUnitAttr());
+}
+
+void MicrosoftEHLowering::ensureCxxThrowDecl(mlir::Location loc) {
+  if (cxxThrowFunc)
+    return;
+  auto voidType = cir::VoidType::get(ctx);
+  auto voidPtrType = cir::PointerType::get(voidType);
+  auto fnTy = cir::FuncType::get({voidPtrType, voidPtrType}, voidType);
+  cxxThrowFunc =
+      getOrCreateRuntimeFuncDecl(mod, loc, "_CxxThrowException", fnTy);
+  auto tripleAttr = mlir::dyn_cast_if_present<mlir::StringAttr>(
+      mod->getAttr(cir::CIRDialect::getTripleAttrName()));
+  if (tripleAttr) {
+    llvm::Triple triple(tripleAttr.getValue());
+    if (triple.getArch() == llvm::Triple::x86)
+      cxxThrowFunc.setCallingConv(cir::CallingConv::X86_StdCall);
+  }
+}
+
+mlir::LogicalResult MicrosoftEHLowering::lowerTryThrow(cir::TryThrowOp op) {
+  mlir::Location loc = op.getLoc();
+  mlir::Block *normalDest = op.getNormalDest();
+  mlir::Block *unwindDest = op.getUnwindDest();
+  builder.setInsertionPoint(op);
+
+  ensureCxxThrowDecl(loc);
+
+  auto voidType = cir::VoidType::get(ctx);
+  auto voidPtrType = cir::PointerType::get(voidType);
+
+  mlir::Value pException;
+  mlir::Value pThrowInfo;
+
+  if (op.rethrows()) {
+    pException = cir::ConstantOp::create(
+        builder, loc,
+        cir::ConstPtrAttr::get(voidPtrType, builder.getI64IntegerAttr(0)));
+    pThrowInfo = cir::ConstantOp::create(
+        builder, loc,
+        cir::ConstPtrAttr::get(voidPtrType, builder.getI64IntegerAttr(0)));
+  } else {
+    pException = op.getExceptionPtr();
+    if (pException.getType() != voidPtrType)
+      pException = cir::CastOp::create(builder, loc, voidPtrType,
+                                       cir::CastKind::bitcast, pException);
+
+    mlir::FlatSymbolRefAttr typeInfoAttr = op.getTypeInfoAttr();
+    if (!typeInfoAttr)
+      return op.emitError("throw missing type info attribute");
+
+    if (auto typeInfoGlobal = mod.lookupSymbol<cir::GlobalOp>(typeInfoAttr)) {
+      auto typeInfoPtrTy = cir::PointerType::get(typeInfoGlobal.getSymType());
+      pThrowInfo = cir::GetGlobalOp::create(builder, loc, typeInfoPtrTy,
+                                            typeInfoAttr.getValue());
+    } else {
+      pThrowInfo = cir::GetGlobalOp::create(builder, loc, voidPtrType,
+                                            typeInfoAttr.getValue());
+    }
+    if (pThrowInfo.getType() != voidPtrType)
+      pThrowInfo = cir::CastOp::create(builder, loc, voidPtrType,
+                                       cir::CastKind::bitcast, pThrowInfo);
+  }
+
+  auto tryCall = cir::TryCallOp::create(
+      builder, loc, mlir::FlatSymbolRefAttr::get(cxxThrowFunc), voidType,
+      normalDest, unwindDest, mlir::ValueRange{pException, pThrowInfo});
+  if (cxxThrowFunc.getCallingConv() == cir::CallingConv::X86_StdCall)
+    tryCall.setCallingConv(cir::CallingConv::X86_StdCall);
+
+  op.erase();
+  return mlir::success();
+}
+
+mlir::LogicalResult MicrosoftEHLowering::lowerFunc(cir::FuncOp funcOp) {
+  if (funcOp.isDeclaration())
+    return mlir::success();
+
+  bool hasEHOps = false;
+  bool hasTerminate = false;
+  SmallVector<cir::EhDispatchOp> dispatches;
+  SmallVector<cir::TryCallOp> tryCalls;
+  SmallVector<cir::TryThrowOp> tryThrows;
+  funcOp.walk([&](mlir::Operation *op) {
+    if (isa<cir::EhInitiateOp, cir::BeginCleanupOp, cir::EhDispatchOp,
+            cir::BeginCatchOp>(op))
+      hasEHOps = true;
+    if (isa<cir::EhTerminateOp>(op)) {
+      hasEHOps = true;
+      hasTerminate = true;
+    }
+    if (auto dispatch = dyn_cast<cir::EhDispatchOp>(op))
+      dispatches.push_back(dispatch);
+    if (auto tryCall = dyn_cast<cir::TryCallOp>(op))
+      tryCalls.push_back(tryCall);
+    if (auto tryThrow = dyn_cast<cir::TryThrowOp>(op)) {
+      tryThrows.push_back(tryThrow);
+      hasEHOps = true;
+    }
+  });
+
+  for (cir::TryThrowOp tryThrow : tryThrows) {
+    if (mlir::failed(lowerTryThrow(tryThrow)))
+      return mlir::failure();
+  }
+
+  if (!tryThrows.empty()) {
+    tryCalls.clear();
+    funcOp.walk([&](cir::TryCallOp tryCall) { tryCalls.push_back(tryCall); });
+  }
+
+  if (hasEHOps) {
+    if (!funcOp.getPersonality())
+      funcOp.setPersonality(kCxxFrameHandler3);
+    ensurePersonalityDecl(funcOp.getLoc());
+  }
+
+  if (hasTerminate)
+    ensureStdTerminateDecl(funcOp.getLoc());
+
+  for (cir::EhDispatchOp dispatch : dispatches) {
+    // If the dispatch only targets cir.eh.terminate, bypass it so try_call
+    // unwinds directly to the terminate cleanuppad block.
+    if (dispatch.getCatchDestinations().empty() &&
+        dispatch.getDefaultDestination()) {
+      bool isTerminate = false;
+      for (auto &op : *dispatch.getDefaultDestination()) {
+        if (isa<cir::EhTerminateOp>(&op)) {
+          isTerminate = true;
+          break;
+        }
+      }
+      if (isTerminate) {
+        builder.setInsertionPoint(dispatch);
+        cir::BrOp::create(builder, dispatch.getLoc(),
+                          dispatch.getDefaultDestination(),
+                          mlir::ValueRange{dispatch.getEhToken()});
+        dispatch.erase();
+      }
+    }
+  }
+
+  SmallVector<cir::InitCatchParamOp> initCatchOps;
+  funcOp.walk([&](cir::InitCatchParamOp op) { initCatchOps.push_back(op); });
+  for (cir::InitCatchParamOp op : initCatchOps)
+    op.erase();
+
+  SmallVector<cir::ConstructCatchParamOp> constructCatchOps;
+  funcOp.walk(
+      [&](cir::ConstructCatchParamOp op) { constructCatchOps.push_back(op); });
+  for (cir::ConstructCatchParamOp op : constructCatchOps)
+    op.erase();
+
+  // Follow trampolines from an unwind destination block to the final EH
+  // handler block (e.g. cir.begin_cleanup or cir.eh.terminate).
+  auto getUnwindTarget = [](mlir::Block *block) -> mlir::Block * {
+    mlir::Block *curr = block;
+    llvm::SmallPtrSet<mlir::Block *, 4> visited;
+    while (visited.insert(curr).second) {
+      if (auto br = dyn_cast_or_null<cir::BrOp>(curr->getTerminator())) {
+        bool isTrampoline = true;
+        for (auto &op : *curr) {
+          if (&op == br.getOperation())
+            break;
+          if (!isa<cir::EhInitiateOp>(&op)) {
+            isTrampoline = false;
+            break;
+          }
+        }
+        if (isTrampoline) {
+          curr = br.getDest();
+          continue;
+        }
+      }
+      break;
+    }
+    return curr;
+  };
+
+  for (cir::TryCallOp tryCall : tryCalls) {
+    mlir::Block *unwindDest = tryCall.getUnwindDest();
+    mlir::Block *target = getUnwindTarget(unwindDest);
+    if (target != unwindDest)
+      tryCall.setSuccessor(target, 1);
+  }
+
+  // Tokens cannot be passed across basic blocks via branch arguments under
+  // the Microsoft C++ ABI. In handler blocks (e.g., cleanuppad or terminate),
+  // replace any incoming !cir.eh_token block argument with a local
+  // cir.eh.initiate operation in that block, and remove the block argument.
+  for (mlir::Block &block : funcOp.getBody()) {
+    for (int i = block.getNumArguments() - 1; i >= 0; --i) {
+      mlir::BlockArgument arg = block.getArgument(i);
+      if (isa<cir::EhTokenType>(arg.getType())) {
+        if (!arg.use_empty()) {
+          builder.setInsertionPointToStart(&block);
+          bool isCleanup = false;
+          for (auto &op : block) {
+            if (isa<cir::BeginCleanupOp>(&op)) {
+              isCleanup = true;
+              break;
+            }
+          }
+          mlir::Location loc =
+              block.empty() ? funcOp.getLoc() : block.front().getLoc();
+          auto localToken = cir::EhInitiateOp::create(
+              builder, loc,
+              isCleanup ? builder.getUnitAttr() : mlir::UnitAttr{});
+          arg.replaceAllUsesWith(localToken);
+        }
+        block.eraseArgument(i);
+      }
+    }
+  }
+
+  // Remove !cir.eh_token operands from branches.
+  SmallVector<cir::BrOp> brOps;
+  funcOp.walk([&](cir::BrOp br) { brOps.push_back(br); });
+  for (cir::BrOp br : brOps) {
+    SmallVector<mlir::Value> newOperands;
+    bool changed = false;
+    for (mlir::Value operand : br.getDestOperands()) {
+      if (isa<cir::EhTokenType>(operand.getType())) {
+        changed = true;
+      } else {
+        newOperands.push_back(operand);
+      }
+    }
+    if (changed) {
+      builder.setInsertionPoint(br);
+      cir::BrOp::create(builder, br.getLoc(), br.getDest(), newOperands);
+      br.erase();
+    }
+  }
+
+  // Erase unreachable dead trampoline blocks.
+  bool changed = true;
+  while (changed) {
+    changed = false;
+    for (mlir::Block &block : llvm::make_early_inc_range(funcOp.getBody())) {
+      if (&block == &funcOp.front())
+        continue;
+      if (block.hasNoPredecessors()) {
+        block.dropAllReferences();
+        block.erase();
+        changed = true;
+      }
+    }
+  }
+
+  return mlir::success();
+}
+
+mlir::LogicalResult MicrosoftEHLowering::run() {
+  for (cir::FuncOp funcOp : mod.getOps<cir::FuncOp>()) {
+    if (mlir::failed(lowerFunc(funcOp)))
+      return mlir::failure();
+  }
+  return mlir::success();
+}
+
 void CIREHABILoweringPass::runOnOperation() {
   auto mod = mlir::cast<mlir::ModuleOp>(getOperation());
 
@@ -1135,13 +1449,10 @@ void CIREHABILoweringPass::runOnOperation() {
 
   // Select the ABI-specific lowering handler from the triple. The Microsoft
   // C++ ABI targets a Windows MSVC environment; everything else uses Itanium.
-  // Extend this when Microsoft ABI lowering is added.
   llvm::Triple triple(tripleAttr.getValue());
   std::unique_ptr<EHABILowering> lowering;
   if (triple.isWindowsMSVCEnvironment()) {
-    mod.emitError(
-        "EH ABI lowering is not yet implemented for the Microsoft ABI");
-    return signalPassFailure();
+    lowering = std::make_unique<MicrosoftEHLowering>(mod);
   } else {
     lowering = std::make_unique<ItaniumEHLowering>(mod);
   }
