@@ -263,6 +263,10 @@ mlir::LogicalResult CIRGenFunction::emitStmt(const Stmt *s,
     return emitDoStmt(cast<DoStmt>(*s));
   case Stmt::CXXTryStmtClass:
     return emitCXXTryStmt(cast<CXXTryStmt>(*s));
+  case Stmt::SEHTryStmtClass:
+    return emitSEHTryStmt(cast<SEHTryStmt>(*s));
+  case Stmt::SEHLeaveStmtClass:
+    return emitSEHLeaveStmt(cast<SEHLeaveStmt>(*s));
   case Stmt::CXXForRangeStmtClass:
     return emitCXXForRangeStmt(cast<CXXForRangeStmt>(*s), attr);
   case Stmt::CoroutineBodyStmtClass:
@@ -499,13 +503,11 @@ mlir::LogicalResult CIRGenFunction::emitStmt(const Stmt *s,
   case Stmt::GotoStmtClass:
   case Stmt::DefaultStmtClass:
   case Stmt::CaseStmtClass:
-  case Stmt::SEHLeaveStmtClass:
   case Stmt::ObjCAtTryStmtClass:
   case Stmt::ObjCAtThrowStmtClass:
   case Stmt::ObjCAtSynchronizedStmtClass:
   case Stmt::ObjCForCollectionStmtClass:
   case Stmt::ObjCAutoreleasePoolStmtClass:
-  case Stmt::SEHTryStmtClass:
   case Stmt::ObjCAtCatchStmtClass:
   case Stmt::ObjCAtFinallyStmtClass:
   case Stmt::DeferStmtClass:
@@ -552,6 +554,8 @@ mlir::LogicalResult CIRGenFunction::emitSimpleStmt(const Stmt *s,
 
   case Stmt::BreakStmtClass:
     return emitBreakStmt(cast<BreakStmt>(*s));
+  case Stmt::SEHLeaveStmtClass:
+    return emitSEHLeaveStmt(cast<SEHLeaveStmt>(*s));
   case Stmt::ReturnStmtClass:
     return emitReturnStmt(cast<ReturnStmt>(*s));
   case Stmt::AttributedStmtClass:
@@ -852,6 +856,22 @@ mlir::LogicalResult CIRGenFunction::emitBreakStmt(const clang::BreakStmt &s) {
   // Insert the new block to continue codegen after the break statement.
   builder.createBlock(builder.getBlock()->getParent());
 
+  return mlir::success();
+}
+
+mlir::LogicalResult CIRGenFunction::emitSEHLeaveStmt(const SEHLeaveStmt &s) {
+  if (sehTryEpilogueStack.empty()) {
+    cgm.errorNYI(s.getSourceRange(), "emitSEHLeaveStmt outside SEH try scope");
+    return mlir::failure();
+  }
+  mlir::Location loc = getLoc(s.getSourceRange());
+  if (!sehFinallyAbnormalSlotStack.empty() &&
+      sehFinallyAbnormalSlotStack.back().isValid()) {
+    mlir::Value zero = builder.getConstantInt(loc, builder.getUInt8Ty(), 0);
+    builder.createStore(loc, zero, sehFinallyAbnormalSlotStack.back());
+  }
+  cir::BrOp::create(builder, loc, sehTryEpilogueStack.back());
+  builder.createBlock(builder.getBlock()->getParent());
   return mlir::success();
 }
 

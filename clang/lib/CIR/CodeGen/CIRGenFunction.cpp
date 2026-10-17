@@ -587,6 +587,8 @@ void CIRGenFunction::startFunction(GlobalDecl gd, QualType returnType,
   didCallStackSave = false;
   curCodeDecl = d;
   const auto *fd = dyn_cast_or_null<FunctionDecl>(d);
+  if (fd && fd->usesSEHTry())
+    curSEHParent = gd;
   curFuncDecl = (d ? d->getNonClosureContext() : nullptr);
 
   // Recursion is disallowed for C++ main, OpenCL, HLSL, SYCL device code and
@@ -753,6 +755,37 @@ void CIRGenFunction::finishFunction(SourceLocation endLoc) {
          "FullExprCleanupScope");
 
   emitEndEHSpec(curCodeDecl);
+
+  if (!escapedLocals.empty()) {
+    SmallVector<mlir::Value, 8> escapedAllocas;
+    mlir::Block &entryBB = mlir::cast<cir::FuncOp>(curFn).getBlocks().front();
+    mlir::Operation *latestAllocaInEntry = nullptr;
+
+    for (const auto &p : escapedLocals) {
+      mlir::Value val = p.second.getPointer();
+      escapedAllocas.push_back(val);
+      if (mlir::Operation *defOp = val.getDefiningOp()) {
+        if (defOp->getBlock() != &entryBB && mlir::isa<cir::AllocaOp>(defOp)) {
+          defOp->moveBefore(&entryBB, entryBB.begin());
+        }
+        if (defOp->getBlock() == &entryBB) {
+          if (!latestAllocaInEntry || latestAllocaInEntry->isBeforeInBlock(defOp))
+            latestAllocaInEntry = defOp;
+        }
+      }
+    }
+
+    mlir::OpBuilder::InsertionGuard guard(builder);
+    mlir::Location loc = getLoc(endLoc);
+    if (latestAllocaInEntry)
+      builder.setInsertionPointAfter(latestAllocaInEntry);
+    else
+      builder.setInsertionPointToStart(&entryBB);
+
+    cir::LLVMIntrinsicCallOp::create(
+        builder, loc, builder.getStringAttr("localescape"),
+        mlir::Type{}, escapedAllocas);
+  }
 }
 
 mlir::LogicalResult CIRGenFunction::emitFunctionBody(const clang::Stmt *body) {
