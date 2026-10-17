@@ -68,8 +68,8 @@ struct __declspec(dllexport) ExportedS {
 // CIR-DAG: cir.global constant external dso_local @"?OutOfLine_Def_Ref@S@@2HB" = #cir.int<5> : !s32i
 // CIR-DAG: cir.global constant external dso_local @"?OutOfLine_Def_NotRef@S@@2HB" = #cir.int<5> : !s32i
 // CIR-DAG: cir.global constant linkonce_odr comdat dso_local @"?Inline_Enum_Ref@S@@2W4Color@1@B" = #cir.int<1> : !s32i
-// CIR-DAG: cir.global constant weak_odr comdat dso_local @"?x@ExportedS@@2FB" = #cir.int<42> : !s16i
-// CIR-DAG: cir.global constant weak_odr comdat dso_local @"?y@ExportedS@@2W4Enum@@B" = #cir.int<2> : !s32i
+// CIR-DAG: cir.global constant weak_odr comdat dso_local dllexport @"?x@ExportedS@@2FB" = #cir.int<42> : !s16i
+// CIR-DAG: cir.global constant weak_odr comdat dso_local dllexport @"?y@ExportedS@@2W4Enum@@B" = #cir.int<2> : !s32i
 
 // CIR-NOT: Inline_NotDef_NotRef
 // CIR-NOT: Inline_Def_NotRef

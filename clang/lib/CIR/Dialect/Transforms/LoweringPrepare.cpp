@@ -182,6 +182,10 @@ struct LoweringPreparePass
   /// Materialize global ctor/dtor list
   void buildGlobalCtorDtorList();
 
+  /// Append 'global' to the module's llvm.used list to make sure it doesn't get
+  /// garbage-collected by the linker.
+  void addUsedGlobal(cir::GlobalOp gv);
+
   cir::FuncOp buildRuntimeFunction(
       mlir::OpBuilder &builder, llvm::StringRef name, mlir::Location loc,
       cir::FuncType type,
@@ -262,10 +266,6 @@ struct LoweringPreparePass
                                     cir::IntType guardTy,
                                     cir::GlobalLinkageKind linkage);
 
-  /// Append 'global' to the module's llvm.used list to make sure it doesn't get
-  /// garbage-collected by the linker.
-  void addUsedGlobal(cir::GlobalOp global);
-
   /// Get the guard variable for a static local declaration.
   cir::GlobalOp getStaticLocalDeclGuardAddress(llvm::StringRef globalSymName) {
     auto it = staticLocalDeclGuardMap.find(globalSymName);
@@ -322,6 +322,7 @@ struct LoweringPreparePass
       guard.setAlignment(guardAlignment.getAsAlign().value());
       guard.setTlsModel(globalOp.getTlsModel());
       guard.setGlobalVisibility(globalOp.getGlobalVisibility());
+      guard.setDLLStorageClass(globalOp.getDLLStorageClass());
 
       // The ABI says: "It is suggested that it be emitted in the same COMDAT
       // group as the associated data object." In practice, this doesn't work

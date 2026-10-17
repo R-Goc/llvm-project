@@ -3449,6 +3449,12 @@ def CIR_TLSModelAttr: CIR_EnumAttr<CIR_TLSModel, "tls_model"> {
   }];
 }
 
+def CIR_DLLStorageClass : CIR_I32Enum<"DLLStorageClass", "DLL storage class", [
+  I32EnumCase<"DefaultStorageClass", 0, "default">,
+  I32EnumCase<"DLLImportStorageClass", 1, "dllimport">,
+  I32EnumCase<"DLLExportStorageClass", 2, "dllexport">
+]>;
+
 def CIR_GlobalOp : CIR_RegionBranchOpBase<"global", [
   SymbolName, SymbolVisibility,
   DeclareOpInterfaceMethods<CIRGlobalValueInterface>,
@@ -3501,6 +3507,10 @@ def CIR_GlobalOp : CIR_RegionBranchOpBase<"global", [
                        OptionalAttr<StrAttr>:$comdat,
                        UnitProp:$constant,
                        UnitProp:$dso_local,
+                       DefaultValuedProp<
+                        EnumProp<CIR_DLLStorageClass>,
+                        "cir::DLLStorageClass::DefaultStorageClass"
+                       >:$dll_storage_class,
                        OptionalAttr<CIR_DynamicInitGuardAttr>:$dynamic_init_guard,
                        OptionalAttr<I64Attr>:$alignment,
                        OptionalAttr<ASTVarDeclInterface>:$ast,
@@ -3524,6 +3534,7 @@ def CIR_GlobalOp : CIR_RegionBranchOpBase<"global", [
     (`tls_model` `=` enum($tls_model)^)?
     (`tls_refs` `=` $tls_refs^)?
     (`dso_local` $dso_local^)?
+    ($dll_storage_class^)?
     (`dynamic_init_guard` `` $dynamic_init_guard^)?
     (` ` custom<GlobalMemorySpace>($addr_space)^ )?
     $sym_name
@@ -3541,6 +3552,15 @@ def CIR_GlobalOp : CIR_RegionBranchOpBase<"global", [
   }];
 
   let extraClassDeclaration = [{
+    cir::DLLStorageClass getDLLStorageClass() { return getDllStorageClass(); }
+    void setDLLStorageClass(cir::DLLStorageClass val) { setDllStorageClass(val); }
+    bool hasDLLImportStorageClass() {
+      return getDllStorageClass() == cir::DLLStorageClass::DLLImportStorageClass;
+    }
+    bool hasDLLExportStorageClass() {
+      return getDllStorageClass() == cir::DLLStorageClass::DLLExportStorageClass;
+    }
+
     bool isDeclaration() {
       // Aliases are always definitions.
       if (getAliasee())
@@ -4388,6 +4408,10 @@ def CIR_FuncOp : CIR_Op<"func", [
       EnumProp<CIR_VisibilityKind>,
       "cir::VisibilityKind::Default"
     >:$global_visibility,
+    DefaultValuedProp<
+      EnumProp<CIR_DLLStorageClass>,
+      "cir::DLLStorageClass::DefaultStorageClass"
+    >:$dll_storage_class,
     TypeAttrOf<CIR_FuncType>:$function_type,
     UnitAttr:$builtin,
     UnitAttr:$coroutine,
@@ -4431,6 +4455,15 @@ def CIR_FuncOp : CIR_Op<"func", [
   >];
 
   let extraClassDeclaration = [{
+    cir::DLLStorageClass getDLLStorageClass() { return getDllStorageClass(); }
+    void setDLLStorageClass(cir::DLLStorageClass val) { setDllStorageClass(val); }
+    bool hasDLLImportStorageClass() {
+      return getDllStorageClass() == cir::DLLStorageClass::DLLImportStorageClass;
+    }
+    bool hasDLLExportStorageClass() {
+      return getDllStorageClass() == cir::DLLStorageClass::DLLExportStorageClass;
+    }
+
     /// Returns the region on the current operation that is callable. This may
     /// return null in the case of an external callable object, e.g. an external
     /// function.
