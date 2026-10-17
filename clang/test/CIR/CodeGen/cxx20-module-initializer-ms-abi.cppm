@@ -34,7 +34,7 @@ int x = foo();
 
 // CIR: cir.global_ctors = [#cir.global_ctor<"_GLOBAL__sub_I_{{.*}}", 65535>]
 
-// CIR:      cir.func internal private @__cxx_global_var_init()
+// CIR:      cir.func internal private @"??__Ex@@YAXXZ"()
 // CIR:        %[[X:.*]] = cir.get_global @"?x@@3HA"
 // CIR:        %[[CALL:.*]] = cir.call @"?foo@@YAHXZ"()
 // CIR:        cir.store align(4) %[[CALL]], %[[X]]
@@ -43,4 +43,4 @@ int x = foo();
 // initializer a named-module interface unit gets under the Itanium mangler, and
 // it just calls the per-variable initializer.
 // CIR:      cir.func internal private @_GLOBAL__sub_I_
-// CIR-NEXT:   cir.call @__cxx_global_var_init()
+// CIR-NEXT:   cir.call @"??__Ex@@YAXXZ"()
