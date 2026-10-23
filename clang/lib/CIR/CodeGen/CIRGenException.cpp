@@ -295,14 +295,22 @@ struct CallEndCatch final : EHScopeStack::Cleanup {
 };
 } // namespace
 
-static mlir::Value callBeginCatch(CIRGenFunction &cgf, mlir::Value ehToken,
-                                  mlir::Type exnPtrTy) {
+static mlir::Value
+callBeginCatch(CIRGenFunction &cgf, mlir::Value ehToken, mlir::Type exnPtrTy,
+               mlir::Value paramAddr = {}, cir::GlobalViewAttr typeInfo = {},
+               std::optional<uint32_t> flags = std::nullopt) {
   auto catchTokenTy = cir::CatchTokenType::get(cgf.getBuilder().getContext());
-  auto beginCatch = cir::BeginCatchOp::create(cgf.getBuilder(),
-                                              cgf.getBuilder().getUnknownLoc(),
-                                              catchTokenTy, exnPtrTy, ehToken);
+  mlir::IntegerAttr flagsAttr;
+  if (flags)
+    flagsAttr = cgf.getBuilder().getI32IntegerAttr(*flags);
+  auto beginCatch = cir::BeginCatchOp::create(
+      cgf.getBuilder(), cgf.getBuilder().getUnknownLoc(), catchTokenTy,
+      exnPtrTy, ehToken, paramAddr, typeInfo, flagsAttr);
 
-  cgf.ehStack.pushCleanup<CallEndCatch>(NormalAndEHCleanup,
+  const auto cleanupKind = cgf.cgm.getTarget().getCXXABI().isMicrosoft()
+                               ? NormalCleanup
+                               : NormalAndEHCleanup;
+  cgf.ehStack.pushCleanup<CallEndCatch>(cleanupKind,
                                         beginCatch.getCatchToken());
 
   return beginCatch.getExnPtr();
@@ -460,7 +468,19 @@ static void initCatchParam(CIRGenFunction &cgf, CIRGenBuilderTy &builder,
                                        paramAddr.getPointer(), kind, copyFun);
   }
 
-  mlir::Value exnPtr = callBeginCatch(cgf, ehToken, builder.getVoidPtrTy());
+  const bool isMSVC = cgf.cgm.getTarget().getCXXABI().isMicrosoft();
+  mlir::Value param{};
+  cir::GlobalViewAttr typeAttr{};
+  std::optional<uint32_t> flags = std::nullopt;
+  if (isMSVC) {
+    CatchTypeInfo typeInfo = cgf.cgm.getCXXABI().getAddrOfCXXCatchHandlerType(
+        mloc, catchParam.getType().getNonReferenceType(), catchParam.getType());
+    param = paramAddr.getPointer();
+    typeAttr = mlir::dyn_cast_or_null<cir::GlobalViewAttr>(typeInfo.rtti);
+    flags = typeInfo.flags;
+  }
+  mlir::Value exnPtr = callBeginCatch(cgf, ehToken, builder.getVoidPtrTy(),
+                                      param, typeAttr, flags);
   cir::InitCatchParamOp::create(builder, mloc, exnPtr, paramAddr.getPointer(),
                                 kind);
   cgf.emitAutoVarCleanups(var);
@@ -483,8 +503,26 @@ void CIRGenFunction::emitBeginCatch(const CXXCatchStmt *catchStmt,
   //   4.  Enter dtor cleanup
   //
   VarDecl *catchParam = catchStmt->getExceptionDecl();
+  const bool isMSVC = cgm.getTarget().getCXXABI().isMicrosoft();
   if (!catchParam) {
-    callBeginCatch(*this, ehToken, builder.getVoidPtrTy());
+    // Catch-all: catch (...)
+    std::optional<uint32_t> flags =
+        isMSVC ? std::optional<uint32_t>(64) : std::nullopt;
+    callBeginCatch(*this, ehToken, builder.getVoidPtrTy(),
+                   /*paramAddr=*/{}, /*typeInfo=*/{}, flags);
+    return;
+  }
+
+  if (isMSVC && !catchParam->getDeclName()) {
+    // Unnamed catch param: catch (int)
+    mlir::Location catchLoc = getLoc(catchStmt->getCatchLoc());
+    QualType caughtType = catchParam->getType();
+    CatchTypeInfo typeInfo = cgm.getCXXABI().getAddrOfCXXCatchHandlerType(
+        catchLoc, caughtType, catchStmt->getCaughtType());
+    callBeginCatch(*this, ehToken, builder.getVoidPtrTy(),
+                   /*paramAddr=*/{},
+                   mlir::dyn_cast_or_null<cir::GlobalViewAttr>(typeInfo.rtti),
+                   typeInfo.flags);
     return;
   }
 
