@@ -32,6 +32,12 @@ using namespace clang::CIRGen;
 
 namespace {
 
+static bool isDeletingDtor(GlobalDecl gd) {
+  return isa<CXXDestructorDecl>(gd.getDecl()) &&
+         (gd.getDtorType() == Dtor_Deleting ||
+          gd.getDtorType() == Dtor_VectorDeleting);
+}
+
 class CIRGenMicrosoftCXXABI : public CIRGenCXXABI {
 public:
   CIRGenMicrosoftCXXABI(CIRGenModule &cgm) : CIRGenCXXABI(cgm) {}
@@ -40,9 +46,12 @@ public:
     return isa<CXXConstructorDecl>(gd.getDecl());
   }
 
-  bool hasMostDerivedReturn(GlobalDecl gd) const override { return false; }
+  bool hasMostDerivedReturn(GlobalDecl gd) const override {
+    return isDeletingDtor(gd);
+  }
 
   bool classifyReturnType(CIRGenFunctionInfo &fi) const override;
+
   StringRef getPureVirtualCallName() override { return "_purecall"; }
   StringRef getDeletedVirtualCallName() override { return "_purecall"; }
 
@@ -58,7 +67,7 @@ public:
 
   bool useThunkForDtorVariant(const CXXDestructorDecl *dtor,
                               CXXDtorType dt) const override {
-    return false;
+    return dt != Dtor_Base;
   }
 
   bool isZeroInitializable(const MemberPointerType *mpt) override {
@@ -105,6 +114,15 @@ public:
     llvm_unreachable("invalid dtor type");
   }
 
+  void adjustCallArgsForDestructorThunk(CIRGenFunction &cgf, GlobalDecl gd,
+                                        CallArgList &callArgs) override {
+    assert((gd.getDtorType() == Dtor_VectorDeleting ||
+            gd.getDtorType() == Dtor_Deleting) &&
+           "Only vector deleting destructor thunks are available in this ABI");
+    callArgs.add(RValue::get(getStructorImplicitParamValue(cgf)),
+                 cgm.getASTContext().IntTy);
+  }
+
   void setThunkLinkage(cir::FuncOp thunk, bool forVTable, GlobalDecl gd,
                        bool returnAdjustment) override {
     cgm.errorNYI("setThunkLinkage: MSVC ABI");
@@ -112,26 +130,13 @@ public:
 
   AddedStructorArgCounts
   buildStructorSignature(GlobalDecl gd,
-                         SmallVectorImpl<CanQualType> &argTys) override {
-    return AddedStructorArgCounts{};
-  }
+                         SmallVectorImpl<CanQualType> &argTys) override;
 
   void addImplicitStructorParams(CIRGenFunction &cgf, QualType &resTy,
-                                 FunctionArgList &params) override {}
+                                 FunctionArgList &params) override;
 
   void emitInstanceFunctionProlog(SourceLocation loc,
-                                  CIRGenFunction &cgf) override {
-    if (cgf.curFuncDecl && cgf.curFuncDecl->hasAttr<NakedAttr>())
-      return;
-
-    mlir::Value thisVal = loadIncomingCXXThis(cgf);
-    setCXXABIThisValue(cgf, thisVal);
-
-    if (hasThisReturn(cgf.curGD)) {
-      if (cgf.returnValue.isValid())
-        cgf.getBuilder().createStore(cgf.getLoc(loc), thisVal, cgf.returnValue);
-    }
-  }
+                                  CIRGenFunction &cgf) override;
 
   AddedStructorArgs getImplicitConstructorArgs(CIRGenFunction &cgf,
                                                const CXXConstructorDecl *d,
@@ -164,17 +169,11 @@ public:
   mlir::Value emitVirtualDestructorCall(CIRGenFunction &cgf,
                                         const CXXDestructorDecl *dtor,
                                         CXXDtorType dtorType, Address thisAddr,
-                                        DeleteOrMemberCallExpr e) override {
-    cgf.cgm.errorNYI(dtor->getSourceRange(),
-                     "emitVirtualDestructorCall: MSVC ABI");
-    return nullptr;
-  }
+                                        DeleteOrMemberCallExpr e) override;
 
   void emitVirtualObjectDelete(CIRGenFunction &cgf, const CXXDeleteExpr *de,
                                Address ptr, QualType elementType,
-                               const CXXDestructorDecl *dtor) override {
-    cgf.cgm.errorNYI(de->getSourceRange(), "emitVirtualObjectDelete: MSVC ABI");
-  }
+                               const CXXDestructorDecl *dtor) override;
 
   size_t getSrcArgforCopyCtor(const CXXConstructorDecl *cd,
                               FunctionArgList &args) const override {
@@ -355,6 +354,58 @@ Address CIRGenMicrosoftCXXABI::initializeArrayCookie(CIRGenFunction &cgf,
   return Address(finalPtr, newPtr.getElementType(), finalAlignment);
 }
 
+CIRGenCXXABI::AddedStructorArgCounts
+CIRGenMicrosoftCXXABI::buildStructorSignature(
+    GlobalDecl gd, SmallVectorImpl<CanQualType> &argTys) {
+  AddedStructorArgCounts added;
+  if (isa<CXXDestructorDecl>(gd.getDecl()) &&
+      (gd.getDtorType() == Dtor_Deleting ||
+       gd.getDtorType() == Dtor_VectorDeleting)) {
+    argTys.push_back(cgm.getASTContext().IntTy);
+    ++added.suffix;
+  }
+  return added;
+}
+
+void CIRGenMicrosoftCXXABI::addImplicitStructorParams(CIRGenFunction &cgf,
+                                                      QualType &resTy,
+                                                      FunctionArgList &params) {
+  ASTContext &context = cgm.getASTContext();
+  const auto *md = cast<CXXMethodDecl>(cgf.curGD.getDecl());
+  assert(isa<CXXConstructorDecl>(md) || isa<CXXDestructorDecl>(md));
+
+  if (isDeletingDtor(cgf.curGD)) {
+    auto *shouldDelete = ImplicitParamDecl::Create(
+        context, /*DC=*/nullptr, cgf.curGD.getDecl()->getLocation(),
+        &context.Idents.get("should_call_delete"), context.IntTy,
+        ImplicitParamKind::Other);
+    params.push_back(shouldDelete);
+    getStructorImplicitParamDecl(cgf) = shouldDelete;
+  }
+}
+
+void CIRGenMicrosoftCXXABI::emitInstanceFunctionProlog(SourceLocation loc,
+                                                       CIRGenFunction &cgf) {
+  if (cgf.curFuncDecl && cgf.curFuncDecl->hasAttr<NakedAttr>())
+    return;
+
+  mlir::Value thisVal = loadIncomingCXXThis(cgf);
+  setCXXABIThisValue(cgf, thisVal);
+
+  if (hasThisReturn(cgf.curGD) || hasMostDerivedReturn(cgf.curGD)) {
+    if (cgf.returnValue.isValid())
+      cgf.getBuilder().createStore(cgf.getLoc(loc), thisVal, cgf.returnValue);
+  }
+
+  if (isDeletingDtor(cgf.curGD)) {
+    assert(getStructorImplicitParamDecl(cgf) &&
+           "no implicit parameter for a deleting destructor?");
+    Address addr = cgf.getAddrOfLocalVar(getStructorImplicitParamDecl(cgf));
+    setStructorImplicitParamValue(
+        cgf, cgf.getBuilder().createLoad(cgf.getLoc(loc), addr));
+  }
+}
+
 void CIRGenMicrosoftCXXABI::emitCXXDestructors(const CXXDestructorDecl *d) {
   cgm.emitGlobal(GlobalDecl(d, Dtor_Base));
 
@@ -405,6 +456,62 @@ void CIRGenMicrosoftCXXABI::emitDestructorCall(
   cgf.emitCXXDestructorCall(gd, callee, thisAddr.emitRawPointer(), thisTy,
                             /*implicitParam=*/nullptr,
                             /*implicitParamTy=*/QualType(), /*e=*/nullptr);
+}
+
+mlir::Value CIRGenMicrosoftCXXABI::emitVirtualDestructorCall(
+    CIRGenFunction &cgf, const CXXDestructorDecl *dtor, CXXDtorType dtorType,
+    Address thisAddr, DeleteOrMemberCallExpr e) {
+  auto *ce = dyn_cast<const CXXMemberCallExpr *>(e);
+  auto *de = dyn_cast<const CXXDeleteExpr *>(e);
+  assert((ce != nullptr) ^ (de != nullptr));
+  assert(ce == nullptr || ce->arg_begin() == ce->arg_end());
+
+  ASTContext &context = cgm.getASTContext();
+  bool vectorDeletingDtorsEnabled =
+      context.getTargetInfo().emitVectorDeletingDtors(context.getLangOpts());
+  GlobalDecl gd(dtor, vectorDeletingDtorsEnabled ? Dtor_VectorDeleting
+                                                 : Dtor_Deleting);
+  const CIRGenFunctionInfo *fInfo =
+      &cgm.getTypes().arrangeCXXStructorDeclaration(gd);
+  cir::FuncType ty = cgm.getTypes().getFunctionType(*fInfo);
+  CIRGenCallee callee = CIRGenCallee::forVirtual(ce, gd, thisAddr, ty);
+
+  bool isDeleting = dtorType == Dtor_Deleting;
+  bool isArrayDelete = de && de->isArrayForm() && vectorDeletingDtorsEnabled;
+  bool isGlobalDelete = de && de->isGlobalDelete() &&
+                        context.getTargetInfo().callGlobalDeleteInDeletingDtor(
+                            context.getLangOpts());
+  int32_t flags =
+      (isDeleting ? 1 : 0) | (isGlobalDelete ? 4 : 0) | (isArrayDelete ? 2 : 0);
+  mlir::Value implicitParam =
+      cgf.getBuilder().getSInt32(flags, cgf.getLoc(dtor->getLocation()));
+
+  QualType thisTy;
+  if (ce)
+    thisTy = ce->getObjectType();
+  else
+    thisTy = de->getDestroyedType();
+
+  while (const ArrayType *aTy = context.getAsArrayType(thisTy))
+    thisTy = aTy->getElementType();
+
+  thisAddr = adjustThisArgumentForVirtualFunctionCall(cgf, gd, thisAddr, true);
+  cgf.emitCXXDestructorCall(gd, callee, thisAddr.emitRawPointer(), thisTy,
+                            implicitParam, context.IntTy, ce);
+  return nullptr;
+}
+
+void CIRGenMicrosoftCXXABI::emitVirtualObjectDelete(
+    CIRGenFunction &cgf, const CXXDeleteExpr *de, Address ptr,
+    QualType elementType, const CXXDestructorDecl *dtor) {
+  if (!cgm.getASTContext().getTargetInfo().callGlobalDeleteInDeletingDtor(
+          cgm.getASTContext().getLangOpts())) {
+    cgf.cgm.errorNYI(de->getSourceRange(),
+                     "emitVirtualObjectDelete: legacy global delete without "
+                     "deleting dtor flag");
+    return;
+  }
+  emitVirtualDestructorCall(cgf, dtor, Dtor_Deleting, ptr, de);
 }
 
 void CIRGenMicrosoftCXXABI::registerGlobalDtor(const VarDecl *vd,
@@ -466,6 +573,7 @@ bool CIRGenMicrosoftCXXABI::classifyReturnType(CIRGenFunctionInfo &fi) const {
   }
   return false;
 }
+
 CIRGenCXXABI *clang::CIRGen::CreateCIRGenMicrosoftCXXABI(CIRGenModule &cgm) {
   return new CIRGenMicrosoftCXXABI(cgm);
 }

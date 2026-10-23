@@ -128,3 +128,9 @@ mlir::Value CIRGenCXXABI::readArrayCookieImpl(CIRGenFunction &cgf, Address ptr,
   cgm.errorNYI("reading a new[] cookie");
   return nullptr;
 }
+
+void CIRGenCXXABI::emitConditionalArrayDtorCall(
+    CIRGenFunction &cgf, const CXXDestructorDecl *dd,
+    mlir::Value shouldDeleteCondition) {
+  llvm_unreachable("vector deleting destructors not supported in this ABI");
+}

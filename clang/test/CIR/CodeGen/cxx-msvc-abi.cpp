@@ -35,7 +35,13 @@ class BasicA {
   int x;
 public:
   BasicA() { x = 42; }
+  ~BasicA();
 };
+
+BasicA::~BasicA() {}
+
+// Destructors return void.
+// CIR-LABEL: cir.func {{.*}} @"??1BasicA@@QEAA@XZ"
 
 void test_basic() {
   BasicA a;
@@ -58,17 +64,25 @@ void test_basic() {
 class Base {
 public:
   Base();
+  ~Base();
 };
 
 class Derived : public Base {
 public:
   Derived();
+  ~Derived();
 };
 
 Derived::Derived() {}
+Derived::~Derived() {}
 
 // Derived ctor calls Base ctor and returns this:
 // CIR-LABEL: cir.func {{.*}} @"??0Derived@@QEAA@XZ"
 // CIR-SAME: (%[[THIS:.*]]: !cir.ptr<!rec_Derived>{{.*}}) -> (!cir.ptr<!rec_Derived>
 // CIR:   cir.call @"??0Base@@QEAA@XZ"
 // CIR:   cir.return %{{.*}} : !cir.ptr<!rec_Derived>
+
+// Derived dtor calls Base dtor:
+// CIR-LABEL: cir.func {{.*}} @"??1Derived@@QEAA@XZ"
+// CIR-SAME: (%[[THIS:.*]]: !cir.ptr<!rec_Derived>
+// CIR:   cir.call @"??1Base@@QEAA@XZ"

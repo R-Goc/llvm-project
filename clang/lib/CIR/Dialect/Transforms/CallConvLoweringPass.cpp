@@ -1220,17 +1220,21 @@ void CallConvLoweringPass::runOnOperation() {
 
   // Collect the fetches before rewriting any, because rewriting one erases
   // it, and a live walk holds the op it is about to visit next.
-  SmallVector<cir::VAArgOp> vaArgs;
-  moduleOp.walk([&](cir::VAArgOp v) { vaArgs.push_back(v); });
-  for (cir::VAArgOp v : vaArgs) {
-    std::optional<ArgClassification> ac = classifier->classifyVAArg(v);
-    if (!ac) {
-      signalPassFailure();
-      return;
-    }
-    if (failed(rewriteCtx.rewriteVAArg(v.getOperation(), *ac, builder))) {
-      signalPassFailure();
-      return;
+  // Win64 va_arg is not expanded in CallConvLowering; it is preserved for LLVM
+  // lowering.
+  if (target != cir::CallConvTarget::X86_64_Win64) {
+    SmallVector<cir::VAArgOp> vaArgs;
+    moduleOp.walk([&](cir::VAArgOp v) { vaArgs.push_back(v); });
+    for (cir::VAArgOp v : vaArgs) {
+      std::optional<ArgClassification> ac = classifier->classifyVAArg(v);
+      if (!ac) {
+        signalPassFailure();
+        return;
+      }
+      if (failed(rewriteCtx.rewriteVAArg(v.getOperation(), *ac, builder))) {
+        signalPassFailure();
+        return;
+      }
     }
   }
 }

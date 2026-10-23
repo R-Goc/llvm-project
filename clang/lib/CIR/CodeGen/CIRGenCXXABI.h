@@ -213,6 +213,10 @@ public:
                                        QualType elementType,
                                        const CXXDestructorDecl *dtor) = 0;
 
+  virtual void emitConditionalArrayDtorCall(CIRGenFunction &cgf,
+                                            const CXXDestructorDecl *dd,
+                                            mlir::Value shouldDeleteCondition);
+
   virtual size_t getSrcArgforCopyCtor(const CXXConstructorDecl *,
                                       FunctionArgList &args) const = 0;
 
