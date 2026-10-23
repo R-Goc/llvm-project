@@ -884,7 +884,8 @@ CIRGenTypes::arrangeCXXStructorDeclaration(GlobalDecl gd) {
   auto *md = cast<CXXMethodDecl>(gd.getDecl());
 
   llvm::SmallVector<CanQualType, 16> argTypes;
-  argTypes.push_back(deriveThisType(md->getParent(), md));
+  const CXXRecordDecl *thisType = theCXXABI.getThisArgumentTypeForMethod(gd);
+  argTypes.push_back(deriveThisType(thisType, md));
 
   bool passParams = true;
 
@@ -931,10 +932,6 @@ CanQualType CIRGenTypes::deriveThisType(const CXXRecordDecl *rd,
   if (rd) {
     recTy = getASTContext().getCanonicalTagType(rd);
   } else {
-    // This can happen with the MS ABI. It shouldn't need anything more than
-    // setting recTy to VoidTy here, but we're flagging it for now because we
-    // don't have the full handling implemented.
-    cgm.errorNYI("deriveThisType: no record decl");
     recTy = getASTContext().VoidTy;
   }
 
@@ -1313,15 +1310,17 @@ RValue CIRGenFunction::emitCall(const CIRGenFunctionInfo &funcInfo,
         }
       }
 
-      // If we have a pointer argument and there's an address space mismatch,
-      // insert an address_space cast to match the expected function signature.
+      // If we have a pointer argument, match the expected function signature.
       if (argType != v.getType()) {
         auto argPtrTy = mlir::dyn_cast<cir::PointerType>(argType);
         auto vPtrTy = mlir::dyn_cast<cir::PointerType>(v.getType());
-        if (argPtrTy && vPtrTy &&
-            argPtrTy.getPointee() == vPtrTy.getPointee() &&
-            argPtrTy.getAddrSpace() != vPtrTy.getAddrSpace()) {
-          v = performAddrSpaceCast(v, argPtrTy);
+        if (argPtrTy && vPtrTy) {
+          if (argPtrTy.getPointee() == vPtrTy.getPointee() &&
+              argPtrTy.getAddrSpace() != vPtrTy.getAddrSpace()) {
+            v = performAddrSpaceCast(v, argPtrTy);
+          } else {
+            v = builder.createBitcast(v, argPtrTy);
+          }
         }
       }
 

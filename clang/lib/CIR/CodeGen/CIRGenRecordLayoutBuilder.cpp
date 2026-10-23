@@ -44,7 +44,7 @@ struct CIRRecordLowering final {
   // member type that ensures correct rounding.
   struct MemberInfo final {
     CharUnits offset;
-    enum class InfoKind { VFPtr, Field, Base, VBase } kind;
+    enum class InfoKind { VFPtr, VBPtr, Field, Base, VBase } kind;
     mlir::Type data;
     /// What this member holds, recorded on the CIR record type.
     cir::RecordMemberKind memberKind;
@@ -130,6 +130,7 @@ struct CIRRecordLowering final {
                       RecordDecl::field_iterator fieldEnd);
 
   mlir::Type getVFPtrType();
+  mlir::Type getVBPtrType();
 
   /// Helper function to check if the target machine is BigEndian.
   bool isBigEndian() const { return astContext.getTargetInfo().isBigEndian(); }
@@ -1311,10 +1312,15 @@ void CIRRecordLowering::accumulateVPtrs() {
                                  getVFPtrType(), cir::RecordMemberKind::Data));
 
   if (astRecordLayout.hasOwnVBPtr())
-    cirGenTypes.getCGModule().errorNYI(recordDecl->getSourceRange(),
-                                       "accumulateVPtrs: hasOwnVBPtr");
+    members.push_back(MemberInfo(astRecordLayout.getVBPtrOffset(),
+                                 MemberInfo::InfoKind::VBPtr, getVBPtrType(),
+                                 cir::RecordMemberKind::Data));
 }
 
 mlir::Type CIRRecordLowering::getVFPtrType() {
+  return cir::VPtrType::get(builder.getContext());
+}
+
+mlir::Type CIRRecordLowering::getVBPtrType() {
   return cir::VPtrType::get(builder.getContext());
 }

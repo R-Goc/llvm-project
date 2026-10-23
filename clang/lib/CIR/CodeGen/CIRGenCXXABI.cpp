@@ -134,3 +134,7 @@ void CIRGenCXXABI::emitConditionalArrayDtorCall(
     mlir::Value shouldDeleteCondition) {
   llvm_unreachable("vector deleting destructors not supported in this ABI");
 }
+
+std::vector<CharUnits> CIRGenCXXABI::getVBPtrOffsets(const CXXRecordDecl *rd) {
+  return {};
+}

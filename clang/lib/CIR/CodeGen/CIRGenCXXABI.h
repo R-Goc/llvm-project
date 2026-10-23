@@ -21,6 +21,8 @@
 
 #include "clang/AST/Mangle.h"
 
+#include <vector>
+
 namespace clang::CIRGen {
 
 class CIRGenFunctionInfo;
@@ -60,6 +62,8 @@ public:
   getVirtualBaseClassOffset(mlir::Location loc, CIRGenFunction &cgf,
                             Address thisAddr, const CXXRecordDecl *classDecl,
                             const CXXRecordDecl *baseClassDecl) = 0;
+
+  virtual std::vector<CharUnits> getVBPtrOffsets(const CXXRecordDecl *rd);
 
   virtual mlir::Value emitDynamicCast(CIRGenFunction &cgf, mlir::Location loc,
                                       QualType srcRecordTy,
@@ -110,7 +114,7 @@ public:
   /// initialized with the type of 'this'.
   virtual AddedStructorArgCounts
   buildStructorSignature(GlobalDecl gd,
-                         llvm::SmallVectorImpl<CanQualType> &argTys) = 0;
+                         SmallVectorImpl<CanQualType> &argTys) = 0;
 
   AddedStructorArgCounts
   addImplicitConstructorArgs(CIRGenFunction &cgf, const CXXConstructorDecl *d,
@@ -147,9 +151,12 @@ public:
   /// zero if no specific type is applicable, e.g. if the ABI expects the "this"
   /// parameter to point to some artificial offset in a complete object due to
   /// vbases being reordered.
-  virtual const clang::CXXRecordDecl *
-  getThisArgumentTypeForMethod(const clang::CXXMethodDecl *md) {
-    return md->getParent();
+  virtual const CXXRecordDecl *getThisArgumentTypeForMethod(GlobalDecl gd) {
+    return cast<CXXMethodDecl>(gd.getDecl())->getParent();
+  }
+
+  const CXXRecordDecl *getThisArgumentTypeForMethod(const CXXMethodDecl *md) {
+    return getThisArgumentTypeForMethod(GlobalDecl(md));
   }
 
   /// Return whether the given global decl needs a VTT (virtual table table)
@@ -241,6 +248,8 @@ public:
   /// Emit any tables needed to implement virtual inheritance.  For Itanium,
   /// this emits virtual table tables.
   virtual void emitVirtualInheritanceTables(const CXXRecordDecl *rd) = 0;
+
+  virtual void emitVBPtrStores(CIRGenFunction &cgf, const CXXRecordDecl *rd) {}
 
   /// Returns true if the thunk should be exported.
   virtual bool exportThunk() = 0;
