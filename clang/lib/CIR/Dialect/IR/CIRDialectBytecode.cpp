@@ -99,6 +99,40 @@ static void writeOptionalInt(DialectBytecodeWriter &writer,
     writer.writeVarInt(*storage);
 }
 
+template <typename EntryTy>
+static LogicalResult readOptionalSignedInt(DialectBytecodeReader &reader,
+                                           std::optional<EntryTy> &storage) {
+  static_assert(std::is_signed_v<EntryTy>, "EntryTy must be signed");
+  uint64_t present = 0;
+  if (failed(reader.readVarInt(present)))
+    return failure();
+  if (present == 0) {
+    storage = std::nullopt;
+    return success();
+  }
+  if (present != 1)
+    return reader.emitError() << "optional integer presence flag " << present
+                              << " is neither 0 nor 1";
+  int64_t value = 0;
+  if (failed(reader.readSignedVarInt(value)))
+    return failure();
+  if (value > static_cast<int64_t>(std::numeric_limits<EntryTy>::max()) ||
+      value < static_cast<int64_t>(std::numeric_limits<EntryTy>::min()))
+    return reader.emitError() << "optional signed integer value " << value
+                              << " does not fit in destination type";
+  storage = static_cast<EntryTy>(value);
+  return success();
+}
+
+template <typename EntryTy>
+static void writeOptionalSignedInt(DialectBytecodeWriter &writer,
+                                   std::optional<EntryTy> storage) {
+  static_assert(std::is_signed_v<EntryTy>, "EntryTy must be signed");
+  writer.writeVarInt(storage.has_value() ? 1 : 0);
+  if (storage)
+    writer.writeSignedVarInt(*storage);
+}
+
 // std::optional<Attr> form (cir.method's symbol). A null attribute is not a
 // valid state and normalizes to std::nullopt on the wire.
 

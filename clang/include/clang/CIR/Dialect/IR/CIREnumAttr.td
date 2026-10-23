@@ -78,4 +78,5 @@ def CIR_MSInheritanceModel : CIR_I32Enum<
     multiple, virtual, or unspecified.
   }];
 }
+
 #endif // CLANG_CIR_DIALECT_IR_CIRENUMATTR_TD
