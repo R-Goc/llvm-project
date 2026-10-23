@@ -11,6 +11,7 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "CIRGenCXXABI.h"
 #include "CIRGenCall.h"
 #include "CIRGenFunction.h"
 #include "CIRGenModule.h"
@@ -3143,7 +3144,17 @@ RValue CIRGenFunction::emitBuiltinExpr(const GlobalDecl &gd, unsigned builtinID,
   case Builtin::BIforward_like:
   case Builtin::BIas_const:
     return RValue::get(emitLValue(e->getArg(0)).getPointer());
-  case Builtin::BI__GetExceptionInfo:
+  case Builtin::BI__GetExceptionInfo: {
+    QualType throwType = fd->getParamDecl(0)->getType();
+    mlir::Location loc = getLoc(e->getSourceRange());
+    if (cir::GlobalOp ti = cgm.getCXXABI().getThrowInfo(loc, throwType)) {
+      cir::PointerType voidPtrTy = builder.getVoidPtrTy();
+      auto gvAttr = builder.getGlobalViewAttr(voidPtrTy, ti);
+      return RValue::get(
+          cir::ConstantOp::create(builder, loc, voidPtrTy, gvAttr));
+    }
+    break;
+  }
   case Builtin::BI__fastfail:
     return errorBuiltinNYI(*this, e, builtinID);
   case Builtin::BI__builtin_coro_id:

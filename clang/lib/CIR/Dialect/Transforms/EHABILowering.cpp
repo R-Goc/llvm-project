@@ -1139,9 +1139,7 @@ void CIREHABILoweringPass::runOnOperation() {
   llvm::Triple triple(tripleAttr.getValue());
   std::unique_ptr<EHABILowering> lowering;
   if (triple.isWindowsMSVCEnvironment()) {
-    mod.emitError(
-        "EH ABI lowering is not yet implemented for the Microsoft ABI");
-    return signalPassFailure();
+    return;
   } else {
     lowering = std::make_unique<ItaniumEHLowering>(mod);
   }
